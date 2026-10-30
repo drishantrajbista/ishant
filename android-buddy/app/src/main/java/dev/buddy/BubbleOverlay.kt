@@ -9,6 +9,7 @@ import android.graphics.Path
 import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
@@ -35,7 +36,13 @@ fun overlayParams(w: Int, h: Int, touchable: Boolean) = WindowManager.LayoutPara
 /** The draggable push-to-talk bubble plus the small reply text bubble that follows it. */
 class BubbleOverlay(private val context: Context, private val callbacks: Callbacks) {
     interface Callbacks {
+        /** A finger landed. It may become push-to-talk, a tap or a drag; Gemini voice starts recording right away. */
+        fun onTouchDown()
+        /** ...and it turned out to be a tap or a drag, not push-to-talk. */
+        fun onTouchAbort()
+        /** Held long enough: push-to-talk. */
         fun onPressStart()
+        /** Released after push-to-talk. */
         fun onPressEnd()
         fun onTap()
     }
@@ -79,6 +86,13 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
     }
 
     fun setState(state: BuddyState) = bubble.setState(state)
+
+    /** A short buzz, e.g. to say "the microphone is open, start talking". */
+    fun buzz() {
+        bubble.performHapticFeedback(
+            if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.LONG_PRESS,
+        )
+    }
     fun setLevel(level: Float) { bubble.level = level.coerceIn(0f, 1f) }
 
     /** Shows [text] in the small bubble next to the floating bubble; null hides it. */
@@ -178,10 +192,15 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
                     startX = bubbleParams.x; startY = bubbleParams.y
                     dragging = false; pttActive = false
                     handler.postDelayed(holdRunnable, HOLD_MS)
+                    callbacks.onTouchDown()
                 }
                 MotionEvent.ACTION_MOVE -> if (!pttActive) {
                     val dx = e.rawX - downX; val dy = e.rawY - downY
-                    if (!dragging && hypot(dx, dy) > slop) { dragging = true; handler.removeCallbacks(holdRunnable) }
+                    if (!dragging && hypot(dx, dy) > slop) {
+                        dragging = true
+                        handler.removeCallbacks(holdRunnable)
+                        callbacks.onTouchAbort()
+                    }
                     if (dragging) {
                         bubbleParams.x = startX + dx.toInt(); bubbleParams.y = startY + dy.toInt()
                         wm.updateViewLayout(this, bubbleParams)
@@ -191,7 +210,10 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     handler.removeCallbacks(holdRunnable)
                     if (pttActive) callbacks.onPressEnd()
-                    else if (!dragging && e.actionMasked == MotionEvent.ACTION_UP) callbacks.onTap()
+                    else if (!dragging) {
+                        callbacks.onTouchAbort()
+                        if (e.actionMasked == MotionEvent.ACTION_UP) callbacks.onTap()
+                    }
                     pttActive = false
                 }
             }

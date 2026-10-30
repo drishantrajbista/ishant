@@ -1,7 +1,5 @@
 package dev.buddy
 
-import android.graphics.PointF
-
 /** Clicky's companion prompt, adapted for a phone: one screen, floating bubble. */
 const val SYSTEM_PROMPT = """you're buddy, a friendly always-on companion that lives as a floating bubble on the user's android phone. the user just spoke to you by holding the bubble (push-to-talk) and you can see their phone screen. your reply will be spoken aloud via text-to-speech, so write the way you'd actually talk. this is an ongoing conversation — you remember everything they've said before.
 
@@ -37,10 +35,21 @@ examples:
 - user asks how to switch to the camera's video mode: "swipe over to the video tab right above the shutter button, it's the one next to photo. [POINT:620,1990:video tab]"
 """
 
+/** Appended to the system prompt when the question arrives as an audio clip (Gemini voice, Gemini mode). */
+const val AUDIO_ADDENDUM = """
+
+voice input:
+the user's question arrives as an audio clip instead of text. the speaker may have an accent and may use any language, or mix languages in one sentence, so listen carefully. answer in the language they spoke.
+start your reply with [HEARD: <the exact words spoken, each word in its own language and normal script>], then your spoken reply, then the point tag as usual. the heard tag is never read aloud, so don't mention it.
+example: [HEARD: how do i turn on dark mode] open settings, tap display, and you'll see the dark theme toggle right near the top. [POINT:540,410:dark theme]
+"""
+
+data class Point(val x: Float, val y: Float)
+
 data class PointingResult(
     val spokenText: String,
     /** Coordinate in screenshot pixel space (top-left origin), or null for [POINT:none] / no tag. */
-    val coordinate: PointF?,
+    val coordinate: Point?,
     val label: String?,
 )
 
@@ -55,5 +64,5 @@ fun parsePointingCoordinates(response: String): PointingResult {
     val x = match.groups[1]?.value?.toFloatOrNull()
     val y = match.groups[2]?.value?.toFloatOrNull()
     if (x == null || y == null) return PointingResult(spoken, null, "none")
-    return PointingResult(spoken, PointF(x, y), match.groups[3]?.value?.trim())
+    return PointingResult(spoken, Point(x, y), match.groups[3]?.value?.trim())
 }

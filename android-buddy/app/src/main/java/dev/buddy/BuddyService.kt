@@ -6,53 +6,57 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.PointF
 import android.media.projection.MediaProjectionManager
-import android.os.Bundle
 import android.os.IBinder
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
-import java.util.Locale
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Request
+import okhttp3.Response
+import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 
 /**
- * Orchestrates push-to-talk -> speech-to-text -> screenshot -> Claude -> TTS + pointer.
- * Runs as a foreground service (mediaProjection|microphone) so the capture session stays alive.
+ * Orchestrates push-to-talk -> speech-to-text -> screenshot -> answer (Claude app hand-off, or streamed Gemini/Claude
+ * reply spoken sentence by sentence + pointer). Runs as a foreground service (mediaProjection|microphone) so the
+ * capture session stays alive.
  */
-class BuddyService : Service(), BubbleOverlay.Callbacks {
+class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var settings: Settings
+    private lateinit var speaker: Speaker
+    private lateinit var phone: PhoneListener
     private val conversation = Conversation()
     private var capturer: ScreenCapturer? = null
     private var bubble: BubbleOverlay? = null
     private var pointer: PointerOverlay? = null
-    private var recognizer: SpeechRecognizer? = null
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
 
     private var state = BuddyState.IDLE
-    private var listening = false
-    private var lastPartial = ""
-    private var job: Job? = null
+    private var recording: VoiceRecording? = null        // Gemini voice: the clip for the press in progress
+    private var job: Job? = null                         // the request in flight: answer -> speech
+    private var shotJob: Deferred<Screenshot>? = null    // the screenshot for the current press
     private var textJob: Job? = null
-    private var utteranceId = ""
-    private var utteranceCount = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -76,137 +80,221 @@ class BuddyService : Service(), BubbleOverlay.Callbacks {
         capturer = ScreenCapturer(this, projection) { stopSelf() }
         pointer = PointerOverlay(this).also { it.show() }
         bubble = BubbleOverlay(this, this).also { it.show() }
-        tts = TextToSpeech(this) { status ->
-            ttsReady = status == TextToSpeech.SUCCESS
-            if (ttsReady) tts?.language = Locale.getDefault()
-        }.also { engine ->
-            engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(id: String?) {}
-                override fun onDone(id: String?) { scope.launch { speechFinished(id) } }
-                @Deprecated("Deprecated in Java")
-                override fun onError(id: String?) { scope.launch { speechFinished(id) } }
-                override fun onStop(id: String?, interrupted: Boolean) { scope.launch { speechFinished(id) } }
-            })
-        }
-        createRecognizer()
+        speaker = Speaker(this) { finishSpeaking() }
+        phone = PhoneListener(this, this)
         running.value = true
         return START_NOT_STICKY
     }
 
-    // region push-to-talk
+    // region touch and push-to-talk
+
+    override fun onTouchDown() {
+        if (settings.voiceEngine != VoiceEngine.GEMINI) return
+        // Gemini voice records from the first instant so the first word isn't clipped; a tap or drag discards it.
+        recording?.discard()
+        recording = VoiceRecording(this, { bubble?.setLevel(it) }, { onPressEnd() }).takeIf { it.start() }
+    }
+
+    override fun onTouchAbort() { discardRecording() }
 
     override fun onPressStart() {
-        job?.cancel()
-        textJob?.cancel()
-        stopSpeech()
-        pointer?.dismiss()
+        cancelWork()
         bubble?.setText(null)
-        val r = recognizer ?: return showMessage("speech recognition isn't available on this phone")
-        lastPartial = ""
-        listening = true
+        when (settings.voiceEngine) {
+            VoiceEngine.GEMINI -> when {
+                settings.geminiKey.isBlank() -> return fail("add a gemini key in buddy's settings, or switch voice to phone")
+                recording == null -> return fail("couldn't open the microphone")
+            }
+            VoiceEngine.PHONE -> if (!phone.start(settings.speechLanguage)) {
+                return fail("speech recognition isn't available on this phone")
+            }
+        }
         setState(BuddyState.LISTENING)
-        r.startListening(
-            Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true),
-        )
+        warmUp()
     }
 
     override fun onPressEnd() {
-        if (listening) recognizer?.stopListening()  // the final result arrives in onResults
-    }
-
-    override fun onTap() { if (state == BuddyState.RESPONDING) { stopSpeech(); finishSpeaking() } }
-
-    private fun createRecognizer() {
-        recognizer?.destroy()
-        recognizer = if (SpeechRecognizer.isRecognitionAvailable(this)) {
-            SpeechRecognizer.createSpeechRecognizer(this).apply { setRecognitionListener(listener) }
-        } else null
-    }
-
-    private val listener = object : RecognitionListener {
-        override fun onRmsChanged(rmsdB: Float) { bubble?.setLevel((rmsdB + 2f) / 12f) }
-        override fun onPartialResults(partialResults: Bundle?) {
-            firstResult(partialResults)?.let { lastPartial = it; bubble?.setText(it) }
-        }
-        override fun onResults(results: Bundle?) = heard(firstResult(results) ?: lastPartial)
-        override fun onError(error: Int) {
-            if (!listening) return
-            if (lastPartial.isNotBlank()) return heard(lastPartial)
-            when (error) {
-                SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
-                    showMessage("i didn't catch that")
-                else -> { createRecognizer(); showMessage("speech recognition failed (error $error)") }
+        val clip = recording
+        when {
+            clip != null -> {
+                recording = null
+                setState(BuddyState.PROCESSING)
+                startCapture()   // grab the screen while the clip's last word is still being recorded
+                val shot = shotJob!!
+                launchWork { handleAudio(clip, shot) }
+            }
+            phone.isActive -> {
+                setState(BuddyState.PROCESSING)
+                startCapture()   // grab the screen while the recognizer finishes
+                phone.release()
             }
         }
-        override fun onReadyForSpeech(params: Bundle?) {}
-        override fun onBeginningOfSpeech() {}
-        override fun onBufferReceived(buffer: ByteArray?) {}
-        override fun onEndOfSpeech() {}
-        override fun onEvent(eventType: Int, params: Bundle?) {}
     }
 
-    private fun firstResult(b: Bundle?) =
-        b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.takeIf { it.isNotBlank() }
+    override fun onTap() {
+        when {
+            // Stop everything: the request, any actions, the speech.
+            state == BuddyState.PROCESSING || state == BuddyState.RESPONDING -> { cancelWork(); finishSpeaking() }
+            // Claude app mode: a tap on the idle bubble shares just the screenshot.
+            state == BuddyState.IDLE && settings.provider == Provider.CLAUDE_APP -> {
+                cancelWork()
+                setState(BuddyState.PROCESSING)
+                startCapture()
+                val shot = shotJob!!
+                launchWork { handOffToClaude(shot.await(), null) }
+            }
+        }
+    }
+
+    // PhoneListener.Events
+    override fun onLevel(level: Float) { bubble?.setLevel(level) }
+    override fun onText(text: String) { bubble?.setText(text) }
+    override fun onReady() { bubble?.buzz() }
+    override fun onResult(text: String) = heard(text)
+    override fun onError(message: String) = showMessage(message)
 
     // endregion
 
     private fun heard(transcript: String) {
-        listening = false
         bubble?.setLevel(0f)
-        if (transcript.isBlank()) return showMessage("i didn't catch that")
+        if (transcript.isBlank()) return showMessage(NOT_HEARD)
         bubble?.setText(null)
-        job = scope.launch {
-            setState(BuddyState.PROCESSING)
+        setState(BuddyState.PROCESSING)
+        startCapture()   // already running if the finger lifted before the recognizer finished
+        val shot = shotJob!!
+        launchWork { answer(shot.await(), Question(transcript = transcript)) }
+    }
+
+    /** Gemini voice: the clip either goes straight into the Gemini request, or is transcribed for the Claude modes. */
+    private suspend fun handleAudio(clip: VoiceRecording, shot: Deferred<Screenshot>) {
+        val audio = clip.finish() ?: throw IOException(NOT_HEARD)
+        if (settings.provider == Provider.GEMINI) return respond(shot.await(), Question(audio = audio))
+        val transcript = try {
+            GeminiClient(settings).transcribe(audio)   // the screenshot is being taken meanwhile
+        } catch (e: EmptyReplyException) {
+            throw IOException(NOT_HEARD)
+        }
+        bubble?.setText("heard: ${transcript.take(100)}")
+        answer(shot.await(), Question(transcript = transcript))
+    }
+
+    private suspend fun answer(shot: Screenshot, question: Question) {
+        if (settings.provider == Provider.CLAUDE_APP) handOffToClaude(shot, question.transcript) else respond(shot, question)
+    }
+
+    // region screenshot
+
+    /** Starts the capture for this press (once): hide our windows, let the screen settle, grab the frame, restore. */
+    private fun startCapture() {
+        if (shotJob != null) return
+        val forClaudeApp = settings.provider == Provider.CLAUDE_APP
+        shotJob = scope.async {
+            bubble?.setHiddenForCapture(true)
+            pointer?.dismiss()
             try {
-                // Hide our own windows so they aren't in the shot; the capture needs a fresh frame afterwards.
-                bubble?.setHiddenForCapture(true)
-                pointer?.dismiss()
-                delay(200)
-                val shot = try { capturer!!.capture() } finally { bubble?.setHiddenForCapture(false) }
-                val reply = conversation.ask(Settings(this@BuddyService).createProvider(), transcript, shot)
-                val parsed = parsePointingCoordinates(reply)
-                parsed.coordinate?.let { c ->
-                    val target = android.graphics.PointF(
-                        c.x * shot.displayWidth / shot.width, c.y * shot.displayHeight / shot.height,
-                    )
-                    pointer?.flyTo(bubble!!.center(), target, parsed.label)
-                }
-                speak(parsed.spokenText)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                showMessage(e.message ?: "something went wrong")
+                delay(CAPTURE_DELAY_MS)
+                // The Claude app gets a sharper image than the ones we stream to a model.
+                if (forClaudeApp) capturer!!.capture(2400, 90) else capturer!!.capture()
+            } finally {
+                bubble?.setHiddenForCapture(false)
             }
         }
     }
 
-    // region TTS
+    // endregion
 
-    private fun speak(text: String) {
-        val engine = tts
-        if (text.isBlank()) return setState(BuddyState.IDLE)
+    // region answers
+
+    /** Streams the reply from Gemini/Claude, speaking it sentence by sentence as it arrives. */
+    private suspend fun respond(shot: Screenshot, question: Question) {
+        speaker.start()
+        var heardLine: String? = null
+        fun show(text: String) =
+            bubble?.setText(listOfNotNull(heardLine, text.takeIf { it.isNotBlank() }).joinToString("\n\n").ifBlank { null })
+
+        val reply = conversation.ask(
+            settings.createProvider(), question, shot,
+            onHeard = { heardLine = "heard: ${it.take(100)}"; show("") },
+            onText = { soFar ->
+                if (state != BuddyState.RESPONDING) setState(BuddyState.RESPONDING)
+                show(speaker.onText(soFar).trim())
+            },
+        )
+        val parsed = parsePointingCoordinates(reply.text)
+        parsed.coordinate?.let { c ->
+            val target = PointF(c.x * shot.displayWidth / shot.width, c.y * shot.displayHeight / shot.height)
+            pointer?.flyTo(bubble!!.center(), target, parsed.label)
+        }
+        if (parsed.spokenText.isBlank()) showMessage("no answer came back") else speaker.end(reply.text)
+    }
+
+    /** Claude app mode: open the Claude app with the screenshot (and question) and let the user tap send. */
+    private suspend fun handOffToClaude(shot: Screenshot, question: String?) {
+        setState(BuddyState.IDLE)
+        // Android 15 only lets SYSTEM_ALERT_WINDOW apps start activities from the background while one of their
+        // overlay windows is visible, so make sure the bubble is back on screen first.
+        delay(OVERLAY_VISIBLE_MS)
+        try {
+            shareToClaudeApp(shot.jpeg, question)
+            showMessage(
+                if (question != null) "opened claude, tap send (question also copied)" else "opened claude, tap send",
+                6000,
+            )
+        } catch (e: ActivityNotFoundException) {
+            if (isClaudeAppInstalled()) {
+                showMessage("this version of the claude app can't take shared screenshots")
+            } else {
+                openClaudeInPlayStore()
+                showMessage("install the Claude app first")
+            }
+        }
+    }
+
+    private fun launchWork(block: suspend () -> Unit) {
+        job = scope.launch {
+            try {
+                block()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DeclinedException) {
+                say(e.message.orEmpty())
+            } catch (e: Exception) {
+                speaker.stop()
+                showMessage(friendly(e))
+            }
+        }
+    }
+
+    private fun friendly(e: Exception) = when (e) {
+        is UnknownHostException, is ConnectException -> "can't reach the network"
+        is SocketTimeoutException -> "the request timed out"
+        else -> e.message ?: e.javaClass.simpleName
+    }
+
+    // endregion
+
+    // region state
+
+    /** Stops whatever is going on: listening, the request, speech, the pointer. (A recording in progress is kept.) */
+    private fun cancelWork() {
+        phone.cancel()
+        job?.cancel()
+        shotJob?.cancel(); shotJob = null
+        textJob?.cancel()
+        speaker.stop()
+        pointer?.dismiss()
+    }
+
+    private fun discardRecording() { recording?.discard(); recording = null }
+
+    private fun fail(message: String) { discardRecording(); showMessage(message) }
+
+    /** Shows and speaks a short canned message. */
+    private fun say(text: String) {
+        speaker.start()
         setState(BuddyState.RESPONDING)
         bubble?.setText(text)
-        if (engine == null || !ttsReady) {
-            textJob = scope.launch { delay(6000); finishSpeaking() }
-            return
-        }
-        utteranceId = "buddy-${++utteranceCount}"
-        engine.speak(text.take(TextToSpeech.getMaxSpeechInputLength() - 1), TextToSpeech.QUEUE_FLUSH, null, utteranceId)
-    }
-
-    /** Stops TTS without triggering the normal "finished" handling. */
-    private fun stopSpeech() {
-        utteranceId = ""
-        tts?.stop()
-    }
-
-    private fun speechFinished(id: String?) {
-        if (id == null || id != utteranceId) return
-        utteranceId = ""
-        finishSpeaking()
+        speaker.end(text)
     }
 
     private fun finishSpeaking() {
@@ -216,20 +304,38 @@ class BuddyService : Service(), BubbleOverlay.Callbacks {
         setState(BuddyState.IDLE)
     }
 
-    // endregion
-
     private fun setState(s: BuddyState) {
         state = s
         bubble?.setState(s)
         if (s != BuddyState.LISTENING) bubble?.setLevel(0f)
     }
 
-    private fun showMessage(text: String) {
-        listening = false
+    private fun showMessage(text: String, ms: Long = 4000) {
+        shotJob?.cancel(); shotJob = null
         setState(BuddyState.IDLE)
         bubble?.setText(text)
         textJob?.cancel()
-        textJob = scope.launch { delay(4000); bubble?.setText(null) }
+        textJob = scope.launch { delay(ms); bubble?.setText(null) }
+    }
+
+    // endregion
+
+    /** Fire-and-forget GETs so DNS and TLS are already done when the real request goes out. */
+    private fun warmUp() {
+        val urls = buildSet {
+            when (settings.provider) {
+                Provider.GEMINI -> add(GEMINI_URL)
+                Provider.CLAUDE -> add(settings.proxyUrl.ifBlank { CLAUDE_URL })
+                Provider.CLAUDE_APP -> {}
+            }
+            if (settings.voiceEngine == VoiceEngine.GEMINI) add(GEMINI_URL)
+        }
+        for (url in urls) runCatching {
+            sharedHttp.newCall(Request.Builder().url(url).build()).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {}
+                override fun onResponse(call: Call, response: Response) { response.close() }
+            })
+        }
     }
 
     private fun buildNotification(): Notification {
@@ -255,8 +361,9 @@ class BuddyService : Service(), BubbleOverlay.Callbacks {
     override fun onDestroy() {
         running.value = false
         scope.cancel()
-        recognizer?.destroy()
-        tts?.shutdown()
+        recording?.discard()
+        if (::phone.isInitialized) phone.destroy()
+        if (::speaker.isInitialized) speaker.shutdown()
         bubble?.remove()
         pointer?.remove()
         capturer?.release()
@@ -269,6 +376,10 @@ class BuddyService : Service(), BubbleOverlay.Callbacks {
         private const val EXTRA_DATA = "projection_data"
         private const val CHANNEL_ID = "buddy"
         private const val NOTIFICATION_ID = 1
+        private const val CAPTURE_DELAY_MS = 150L
+        private const val OVERLAY_VISIBLE_MS = 150L
+        private const val GEMINI_URL = "https://generativelanguage.googleapis.com/"
+        private const val CLAUDE_URL = "https://api.anthropic.com/"
 
         val running = MutableStateFlow(false)
 

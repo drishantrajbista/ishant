@@ -2,6 +2,7 @@ package dev.buddy
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -9,6 +10,7 @@ import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.util.Base64
 import android.util.DisplayMetrics
@@ -18,28 +20,32 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import kotlin.math.max
-import kotlin.math.roundToInt
+import kotlin.math.min
 
 class Screenshot(
-    val jpegBase64: String,
-    /** Size of the JPEG sent to Claude (coordinate space of POINT tags). */
+    val jpeg: ByteArray,
+    /** Size of the JPEG (the coordinate space of POINT tags). */
     val width: Int,
     val height: Int,
     /** Real display size in pixels, used to scale pointer targets. */
     val displayWidth: Int,
     val displayHeight: Int,
-)
+) {
+    val jpegBase64: String by lazy { Base64.encodeToString(jpeg, Base64.NO_WRAP) }
+}
 
 /**
  * One MediaProjection + VirtualDisplay + ImageReader for the service's lifetime. Android 14 allows a single
  * consent token per projection, so we never recreate the projection; on rotation we only resize the display.
+ * Frames arrive on a background thread and all pixel work happens off the main thread.
  */
 class ScreenCapturer(context: Context, private val projection: MediaProjection, onStopped: () -> Unit) {
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-    private val handler = Handler(Looper.getMainLooper())
+    private val thread = HandlerThread("buddy-capture").apply { start() }
+    private val frameHandler = Handler(thread.looper)
     private val lock = Any()
     private var latest: Image? = null
-    private var reader: ImageReader
+    @Volatile private var reader: ImageReader
     private var display: VirtualDisplay
     private var width: Int
     private var height: Int
@@ -53,11 +59,11 @@ class ScreenCapturer(context: Context, private val projection: MediaProjection, 
         val m = realMetrics()
         width = m.widthPixels; height = m.heightPixels; dpi = m.densityDpi
         // Android 14 requires the callback to be registered before creating the VirtualDisplay.
-        projection.registerCallback(callback, handler)
+        projection.registerCallback(callback, Handler(Looper.getMainLooper()))
         reader = newReader(width, height)
         display = projection.createVirtualDisplay(
             "buddy", width, height, dpi, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            reader.surface, null, handler,
+            reader.surface, null, frameHandler,
         )
     }
 
@@ -68,8 +74,9 @@ class ScreenCapturer(context: Context, private val projection: MediaProjection, 
         r.setOnImageAvailableListener({
             // A VirtualDisplay only emits frames when pixels change, so keep the newest frame around.
             val image = it.acquireLatestImage() ?: return@setOnImageAvailableListener
+            if (it !== reader) return@setOnImageAvailableListener image.close()  // frame from a replaced reader
             synchronized(lock) { latest?.close(); latest = image }
-        }, handler)
+        }, frameHandler)
     }
 
     private fun resizeIfRotated() {
@@ -84,47 +91,42 @@ class ScreenCapturer(context: Context, private val projection: MediaProjection, 
         old.close()
     }
 
-    /** Grabs the newest frame, downscales so the long edge is <= 1280 and JPEG-encodes it (quality 80). */
-    suspend fun capture(): Screenshot {
+    /** Grabs the newest frame, downscales so the long edge is <= [maxEdge] and JPEG-encodes it. */
+    suspend fun capture(maxEdge: Int = 1280, quality: Int = 80): Screenshot = withContext(Dispatchers.Default) {
         resizeIfRotated()
-        var frame: Bitmap? = null
+        val w = width
+        val h = height
+        val scale = min(1f, maxEdge.toFloat() / max(w, h))
+        var bitmap: Bitmap? = null
         var tries = 0
-        while (frame == null && tries++ < 40) {
-            frame = synchronized(lock) { latest?.toBitmap() }
-            if (frame == null) delay(50)
+        while (bitmap == null && tries++ < 40) {
+            // Copy while holding the lock: the frame thread closes the Image as soon as a newer one arrives.
+            bitmap = synchronized(lock) { latest?.takeIf { it.width == w && it.height == h }?.toBitmap(scale) }
+            if (bitmap == null) delay(50)
         }
-        val full = frame ?: error("No screen frame available yet")
-        return withContext(Dispatchers.Default) {
-            val scale = MAX_EDGE.toFloat() / max(full.width, full.height)
-            val scaled = if (scale < 1f) {
-                Bitmap.createScaledBitmap(full, (full.width * scale).roundToInt(), (full.height * scale).roundToInt(), true)
-            } else full
-            val out = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, 80, out)
-            Screenshot(
-                Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP),
-                scaled.width, scaled.height, full.width, full.height,
-            )
-        }
+        val scaled = bitmap ?: error("No screen frame available yet")
+        val out = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
+        Screenshot(out.toByteArray(), scaled.width, scaled.height, w, h)
     }
 
-    private fun Image.toBitmap(): Bitmap {
+    /** Copies the frame (dropping row padding) and scales it in one pass. */
+    private fun Image.toBitmap(scale: Float): Bitmap {
         val plane = planes[0]
         val rowPixels = plane.rowStride / plane.pixelStride
         val padded = Bitmap.createBitmap(rowPixels, height, Bitmap.Config.ARGB_8888)
         padded.copyPixelsFromBuffer(plane.buffer.also { it.rewind() })
-        return if (rowPixels == width) padded else Bitmap.createBitmap(padded, 0, 0, width, height)
+        val matrix = Matrix().apply { setScale(scale, scale) }
+        return Bitmap.createBitmap(padded, 0, 0, width, height, matrix, true).also { if (it !== padded) padded.recycle() }
     }
 
     fun release() {
         projection.unregisterCallback(callback)
         display.release()
+        reader.setOnImageAvailableListener(null, null)
         synchronized(lock) { latest?.close(); latest = null }
         reader.close()
+        thread.quitSafely()
         projection.stop()
-    }
-
-    private companion object {
-        const val MAX_EDGE = 1280
     }
 }

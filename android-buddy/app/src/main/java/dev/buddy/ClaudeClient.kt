@@ -15,8 +15,9 @@ class ClaudeClient(private val settings: Settings) : AiProvider {
         systemPrompt: String,
         history: List<Pair<String, String>>,
         screenshot: Screenshot,
-        transcript: String,
+        question: Question,
     ): Flow<String> {
+        val transcript = requireNotNull(question.transcript) { "Claude takes text questions only" }
         val messages = JSONArray()
         history.forEach { (user, assistant) ->
             messages.put(JSONObject().put("role", "user").put("content", user))
@@ -34,35 +35,54 @@ class ClaudeClient(private val settings: Settings) : AiProvider {
                     .put(JSONObject().put("type", "text").put("text", transcript)),
             ),
         )
+        val model = settings.claudeModel
+        val proxy = settings.proxyUrl.trimEnd('/')
+        val direct = proxy.isEmpty()
+        // Thinking tokens count against max_tokens, so leave room; "low" effort keeps the thinking short.
+        // (No thinking/temperature/top_p/top_k: thinking can't be switched off on Sonnet or Opus without a 400.)
         val body = JSONObject()
-            .put("model", settings.claudeModel)
-            .put("max_tokens", 1024)
+            .put("model", model)
+            .put("max_tokens", 4096)
             .put("stream", true)
+            .put("output_config", JSONObject().put("effort", "low"))
             .put("system", systemPrompt)
             .put("messages", messages)
+        // Server-side fallback: direct mode only (Clicky's worker doesn't forward beta headers), not on Haiku.
+        val serverFallback = direct && model in FALLBACK_MODELS
+        if (serverFallback) body.put("fallbacks", "default")
 
-        val proxy = settings.proxyUrl.trimEnd('/')
         val request = Request.Builder()
-            .url(if (proxy.isNotEmpty()) "$proxy/chat" else "https://api.anthropic.com/v1/messages")
+            .url(if (direct) "https://api.anthropic.com/v1/messages" else "$proxy/chat")
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .apply {
-                if (proxy.isEmpty()) {
+                if (direct) {
                     header("x-api-key", settings.claudeKey)
                     header("anthropic-version", "2023-06-01")
+                    if (serverFallback) header("anthropic-beta", "server-side-fallback-2026-07-01")
                 }
             }
             .build()
 
         return flow {
+            var emitted = false
+            var stopReason: String? = null
             sseData(request).collect { data ->
                 val json = JSONObject(data)
                 when (json.optString("type")) {
+                    // Only text_delta is spoken; thinking_delta blocks are ignored.
                     "content_block_delta" -> json.optJSONObject("delta")
                         ?.takeIf { it.optString("type") == "text_delta" }
-                        ?.let { emit(it.getString("text")) }
+                        ?.let { emitted = true; emit(it.getString("text")) }
+                    "message_delta" -> json.optJSONObject("delta")?.str("stop_reason")?.let { stopReason = it }
                     "error" -> throw IOException(json.optJSONObject("error")?.optString("message") ?: "stream error")
                 }
             }
+            if (stopReason == "refusal") throw DeclinedException()
+            if (!emitted) throw EmptyReplyException(stopReason)
         }
+    }
+
+    private companion object {
+        val FALLBACK_MODELS = setOf("claude-sonnet-5-5", "claude-opus-5-5")
     }
 }
