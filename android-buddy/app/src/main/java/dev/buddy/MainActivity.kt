@@ -147,6 +147,9 @@ private class AppState(private val context: Context, val settings: Settings) {
     var notifAccess by mutableStateOf(false)
     var calendarOk by mutableStateOf(false)
     var conversation by mutableStateOf(settings.conversationMode)
+    var learn by mutableStateOf(settings.learnFromMe)
+    var notes by mutableStateOf(settings.notes)
+    var aliases by mutableStateOf(settings.aliases)
     var modeNote by mutableStateOf<String?>(null)
     var crashText by mutableStateOf("")
 
@@ -166,6 +169,8 @@ private class AppState(private val context: Context, val settings: Settings) {
         crashText = CrashLog.read(context)
         calendarOk = context.hasCalendarPermission()
         claudeInstalled = context.isClaudeAppInstalled()
+        notes = settings.notes   // Buddy may have saved something while this screen was closed
+        aliases = settings.aliases
     }
 
     fun pick(p: Provider) { provider = p; settings.provider = p }
@@ -185,6 +190,10 @@ private class AppState(private val context: Context, val settings: Settings) {
     fun saveAccent(tag: String) { voiceAccent = tag; settings.voiceAccent = tag }
     fun setDraw(on: Boolean) { drawTags = on; settings.drawTags = on }
     fun saveConversation(on: Boolean) { conversation = on; settings.conversationMode = on }
+    fun saveLearn(on: Boolean) { learn = on; settings.learnFromMe = on }
+    fun deleteNote(note: String) { notes = notes - note; settings.notes = notes }
+    fun deleteAlias(alias: Alias) { aliases = aliases - alias; settings.aliases = aliases }
+    fun clearMemory() { notes = emptyList(); aliases = emptyList(); settings.notes = notes; settings.aliases = aliases }
 }
 
 private class Actions(
@@ -493,7 +502,7 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
                             { state.pick(if (it == 0) VoiceEngine.PHONE else VoiceEngine.GEMINI) })
                     }
                     Text(
-                        "For mixed Nepali/Hindi/English, Gemini voice is the most accurate.",
+                        "For mixed Nepali/English, Gemini voice is the most accurate.",
                         style = MaterialTheme.typography.bodySmall, color = colors.labelSecondary,
                         modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
                     )
@@ -583,6 +592,33 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
                 PermissionRow("Calendar", "Lets Claude read your upcoming events, read-only, when you ask.", Icons.Default.Info, Tint.Blue, state.calendarOk, actions.grantCalendar)
             }
             Footnote("Alarms, timers, media controls, flashlight and volume need no special permission. Say \"what's my day\" for a quick briefing.")
+
+            // --- Memory ---
+            SectionHeader("Memory")
+            GroupCard {
+                androidx.compose.foundation.layout.Column(Modifier.animateContentSize(spring)) {
+                    SettingRow("Learn from me", "Buddy saves short notes about your preferences and the words you use. Off: it neither saves nor uses them.", Icons.Default.Face, Tint.Purple) {
+                        MinimalSwitch(state.learn) { state.saveLearn(it) }
+                    }
+                    if (state.notes.isEmpty() && state.aliases.isEmpty()) {
+                        Hairline()
+                        SettingRow("Nothing learned yet", "Tell Buddy a preference, or correct it, and it will remember.")
+                    }
+                    state.notes.forEach { n ->
+                        Hairline()
+                        SettingRow(n) { ForgetButton { state.deleteNote(n) } }
+                    }
+                    state.aliases.forEach { a ->
+                        Hairline()
+                        SettingRow("\"${a.phrase}\" opens ${a.app}", "Runs instantly, without asking Claude") { ForgetButton { state.deleteAlias(a) } }
+                    }
+                    if (state.notes.isNotEmpty() || state.aliases.isNotEmpty()) {
+                        Hairline()
+                        SettingRow("Clear all", icon = Icons.Default.Close, tint = Tint.Red, onClick = state::clearMemory)
+                    }
+                }
+            }
+            Footnote("Stored only on this phone. Notes go to Claude only as context in your own requests.")
 
             // --- Control ---
             SectionHeader("Control")
@@ -676,6 +712,10 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
         }
     }
 }
+
+@Composable
+private fun ForgetButton(onClick: () -> Unit) =
+    Icon(Icons.Default.Close, "Forget", tint = colors.labelTertiary, modifier = Modifier.pressable(onClick).padding(8.dp))
 
 private fun fixLabel(f: Fix) = when (f) {
     Fix.SWITCH_TO_API -> "Switch"

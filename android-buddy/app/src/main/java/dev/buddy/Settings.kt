@@ -18,7 +18,7 @@ private const val OLD_DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
 
 /** (BCP-47 tag, or "" for the device default) to label, for the phone recognizer. */
 const val AUTO_LANGUAGE = "auto"
-val AUTO_LANGUAGES = listOf("en-IN", "ne-NP", "hi-IN")
+val AUTO_LANGUAGES = listOf("en-IN", "ne-NP")
 
 /** The language tag the recognizer is told to prefer: Auto starts from Indian English. */
 fun recognizerLanguage(setting: String) = if (setting == AUTO_LANGUAGE) "en-IN" else setting
@@ -28,13 +28,12 @@ const val DEFAULT_ACCENT = "en-IN"
 val ACCENTS = listOf("" to "Device default", "en-IN" to "English (India)", "en-US" to "English (US)", "en-GB" to "English (UK)")
 
 val SPEECH_LANGUAGES = listOf(
-    AUTO_LANGUAGE to "Auto: English + Nepali + Hindi",
+    AUTO_LANGUAGE to "Auto: English + Nepali",
     "" to "Device default",
     "en-US" to "English (US) en-US",
     "en-GB" to "English (UK) en-GB",
     "en-IN" to "English (India) en-IN",
     "ne-NP" to "Nepali ne-NP",
-    "hi-IN" to "Hindi hi-IN",
 )
 
 /** Mode, voice engine, per-provider keys and models, stored with EncryptedSharedPreferences. */
@@ -108,10 +107,23 @@ class Settings(context: Context) : QuotaStore {
         get() = prefs.getInt("hints_shown", 0)
         set(v) = prefs.edit().putInt("hints_shown", v).apply()
 
-    /** Phone voice language; new installs use Auto (English + Nepali + Hindi). */
+    /** Phone voice language; new installs use Auto (English + Nepali). */
     var speechLanguage: String
-        get() = if (prefs.contains("speech_language")) str("speech_language") else AUTO_LANGUAGE
+        get() = if (prefs.contains("speech_language")) str("speech_language").let { if (it == "hi-IN") AUTO_LANGUAGE else it } else AUTO_LANGUAGE   // Hindi was dropped
         set(v) = put("speech_language", v)
+
+    /** "Learn from me": Claude may save short notes about your preferences and phrasing; stored only on this phone. */
+    var learnFromMe: Boolean
+        get() = str("learn", "1") == "1"
+        set(v) = put("learn", if (v) "1" else "0")
+
+    var notes: List<String>
+        get() = decodeNotes(prefs.getString("memory_notes", "").orEmpty())
+        set(v) = prefs.edit().putString("memory_notes", encodeNotes(v)).apply()
+
+    var aliases: List<Alias>
+        get() = decodeAliases(prefs.getString("memory_aliases", "").orEmpty())
+        set(v) = prefs.edit().putString("memory_aliases", encodeAliases(v)).apply()
 
     /** The accent of spoken replies (all replies are English); unset means English (India). */
     var voiceAccent: String

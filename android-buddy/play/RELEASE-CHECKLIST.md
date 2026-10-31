@@ -25,4 +25,4 @@ Files in this folder: `store-listing.md`, `privacy-policy.md`, `data-safety.md`,
 - If rejected, the message names the policy; fix the specific point and resubmit.
 
 ## 4. Updating later
-Increase `versionCode` for every upload (next is 11), rebuild with `./gradlew bundleRelease` using the same keystore, upload the new `.aab`.
+Increase `versionCode` for every upload (next is 16), rebuild with `./gradlew bundleRelease` using the same keystore, upload the new `.aab`.

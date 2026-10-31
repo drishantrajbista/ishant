@@ -9,7 +9,7 @@ import java.util.Locale
 
 /**
  * Speaks a reply. [onFinished] fires on the main thread once everything queued has been spoken. Text containing
- * Devanagari is read with a Nepali (or Hindi) voice.
+ * Devanagari is read with a Nepali voice, if one is installed.
  */
 class Speaker(context: Context, private val rate: () -> Float, private val accent: () -> String, private val onFinished: () -> Unit) {
     private val main = Handler(Looper.getMainLooper())
@@ -73,7 +73,7 @@ class Speaker(context: Context, private val rate: () -> Float, private val accen
         }
     }
 
-    /** Devanagari text gets a Nepali voice (Hindi if that isn't installed); everything else the device default. */
+    /** Devanagari text gets a Nepali voice if one is installed; everything else the device default. */
     private fun useVoiceFor(engine: TextToSpeech, text: String) {
         val wantDevanagari = text.any { it in 'ऀ'..'ॿ' }
         if (!wantDevanagari) {
@@ -89,10 +89,8 @@ class Speaker(context: Context, private val rate: () -> Float, private val accen
         }
         if (devanagari) return
         devanagari = true
-        // Devanagari is only a fallback (replies are English): a Nepali voice, or Hindi if that isn't installed.
-        if (engine.setLanguage(Locale.forLanguageTag("ne-NP")) < TextToSpeech.LANG_AVAILABLE) {
-            engine.setLanguage(Locale.forLanguageTag("hi-IN"))
-        }
+        // Devanagari is only a fallback (replies are English): a Nepali voice if one is installed.
+        engine.setLanguage(Locale.forLanguageTag("ne-NP"))
     }
 
     private fun ended(id: String?) {

@@ -129,13 +129,27 @@ go elsewhere and it springs to the nearest screen edge.
 
 ## Languages
 
-Speak Nepali, Hindi, English or a mix, in any script: Claude understands it and **always replies in simple English** (the
-prompt and the Claude-app hand-off text both say so). Phone voice defaults to **Auto: English + Nepali + Hindi** (on
+Speak Nepali, English or a mix, in Roman or Devanagari script: Claude understands it and **always replies in simple English** (the
+prompt and the Claude-app hand-off text both say so). Phone voice defaults to **Auto: English + Nepali** (on
 Android 14+ the recognizer detects and follows the language as you switch; earlier versions use Indian English), and
 Gemini voice, which writes each word in its own language and script, is the most accurate for mixes. The instant local
-commands also know a few common Nepali/Hindi phrases, Romanized or Devanagari ("youtube kholo", "torch on gara",
+commands also know a few common Nepali phrases, Romanized or Devanagari ("youtube kholo", "torch on gara",
 "flashlight band karo", "volume badhau", "pachadi"); anything unsure goes to Claude. Spoken replies can use an English
 accent of your choice (default English India, if the phone's voice has it).
+
+### Memory (learns how you talk)
+
+Buddy can adapt to you, on this phone only. **Memory** in the app lists everything it has learned, each item deletable,
+with **Clear all** and a **Learn from me** switch (on by default; off means Buddy neither saves nor uses it).
+- **Notes**: when you state a preference or correct Buddy, Claude can save a short note with the `remember` tool
+  (at most 30 notes of 120 characters). Notes that look sensitive are refused: anything containing "password" or similar
+  words, card-number-like digit runs, or OTP-like codes. The prompt also tells Claude never to save sensitive data or
+  one-off facts. The notes (at most 600 characters) go to Claude only as context at the start of your own requests.
+- **Phrases**: when Claude resolves an app phrase Buddy's local router didn't know (say "shopping" for Daraz) and you
+  don't correct it, Buddy stores phrase -> app (at most 50, the oldest dropped first), so next time "open shopping"
+  opens the app instantly with no Claude call.
+
+Everything is stored in the app's encrypted preferences and never sent anywhere else.
 
 ### Phone context and default apps
 
@@ -160,7 +174,7 @@ Setup has a **Voice recognition** setting with two engines.
   - Needs a (free) Gemini key. Your recording is sent to Google; on the free tier Google may use it to improve its
     products.
 - **Phone (Google speech)** is the default when there is no Gemini key. It uses Android's `SpeechRecognizer`.
-  - Pick a **Speech language** (device default, English US/UK/India, Nepali, Hindi).
+  - Pick a **Speech language** (Auto: English + Nepali, device default, English US/UK/India, Nepali). A stored Hindi choice from an older version switches to Auto.
   - If you pause mid-sentence while still holding, Buddy restarts the recognizer and keeps what you said, so it never
     cuts you off; everything you said is joined when you let go.
   - The bubble buzzes when the recognizer is ready for you to start.
@@ -174,7 +188,7 @@ midnight Pacific. If every model is used up, Buddy says so and uses Phone voice 
 switches back. A 400 for an unsupported thinking setting only changes the thinking setting (remembered per model),
 never the model.
 
-Spoken replies containing Devanagari are read with a Nepali voice (Hindi if Nepali isn't installed).
+Spoken replies containing Devanagari are read with a Nepali voice if one is installed.
 
 ## Architecture mapping
 
@@ -298,6 +312,7 @@ last answer's timing, e.g. "Last answer: 6.2 s (Claude 4.1 s, voice 1.5 s, scree
 - **Claude API mode:** the screenshot and your words go to Anthropic.
 - **Gemini voice:** only your recording goes to Google (never the screenshot). On Gemini's free tier Google may use it
   to improve its products.
-- API keys are stored with `EncryptedSharedPreferences` on the device.
+- API keys, and what Buddy learns about you (Memory), are stored with `EncryptedSharedPreferences` on the device; notes
+  reach Claude only as context in your own requests.
 - The phone's speech recognizer and text-to-speech engines may be cloud-based depending on the device.
 - Buddy hides its bubble and drawings before each capture, but Android may still show a screen-capture indicator.

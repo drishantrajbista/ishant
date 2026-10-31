@@ -69,6 +69,8 @@ object AgentJson {
                 JSONObject().put("action", JSONObject().put("type", "string").put("enum", JSONArray(listOf("up", "down", "mute", "max")))), listOf("action")))
             .put(custom("device_status", "Battery, charging, time and date, wifi and ringer mode.", JSONObject(), emptyList()))
             .put(custom("default_apps", "The user's default apps (browser, dialer, messages, email, camera, maps, music, gallery, launcher).", JSONObject(), emptyList()))
+            .put(custom("remember", "Save one short note about a stable preference or phrasing habit of the user (never passwords, codes, card numbers or other sensitive data; never one-off facts).",
+                JSONObject().put("note", prop("string", "a short note, at most 120 characters")), listOf("note")))
             .put(custom("web_search", "Search the web in the browser.", JSONObject().put("query", prop("string", "what to search for")), listOf("query")))
             .put(custom(
                 "android_nav", "Android system navigation.",

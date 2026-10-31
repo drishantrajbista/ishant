@@ -29,7 +29,9 @@ private val SCREEN_CHANGING = setOf(
 )
 
 /** Carries out Claude's tool calls on the real phone through [BuddyAccessibilityService]. */
-class PhoneControl(private val context: Context, private val stage: Stage) : Phone {
+class PhoneControl(private val context: Context, private val stage: Stage, private val settings: Settings) : Phone {
+    /** The label open_app resolved in the current request (to learn "phrase = app" if the user moves on). */
+    var openedApp: String? = null
     /** Maps the latest screenshot Claude saw to the display. Claude's coordinates are in that screenshot's pixels. */
     var map: ScreenMap? = null
         private set
@@ -111,6 +113,11 @@ class PhoneControl(private val context: Context, private val stage: Stage) : Pho
             "media" -> { stage.status("media ${use.input.optString("action")}"); if (!context.mediaKey(use.input.optString("action"))) throw ToolError("unknown media action") }
             "torch" -> { stage.status("flashlight"); if (!context.setTorch(use.input.optBoolean("on"))) throw ToolError("this phone has no flashlight") }
             "volume" -> { stage.status("volume"); if (!context.changeVolume(use.input.optString("action"))) throw ToolError("unknown volume action") }
+            "remember" -> {
+                if (!settings.learnFromMe) throw ToolError("learning from the user is switched off in buddy's settings")
+                val note = cleanNote(use.input.optString("note")) ?: throw ToolError("that can't be saved: it must be a short note (at most $MAX_NOTE_CHARS characters) and not sensitive")
+                settings.notes = addNote(settings.notes, note)
+            }
             "default_apps" -> shotResult = listOf(AgentJson.text(formatDefaultApps(context.defaultApps())))
             "device_status" -> shotResult = listOf(AgentJson.text(context.deviceStatus()))
             "web_search" -> { stage.status("searching"); context.webSearch(use.input.optString("query")); a11y?.acted() }
@@ -266,6 +273,7 @@ class PhoneControl(private val context: Context, private val stage: Stage) : Pho
         val label = match.best ?: throw ToolError("no app named \"$name\". closest: ${match.candidates.joinToString(", ").ifEmpty { "none" }}")
         stage.status("opening $label")
         context.launchApp(apps.getValue(label))
+        openedApp = label
         a11y?.acted()
     }
 }

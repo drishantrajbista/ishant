@@ -88,12 +88,12 @@ fun confidentApp(name: String, labels: List<String>): String? {
 private val SETTINGS_WORDS = mapOf("wifi" to "wifi", "wi fi" to "wifi", "bluetooth" to "bluetooth", "display" to "display",
     "battery" to "battery", "sound" to "sound", "location" to "location")
 
-// Nepali / Hindi (Romanized or Devanagari): a small, conservative set. Anything unsure goes to Claude.
-private val OPEN_WORDS = "kholo|khola|kholdeu|kholnu|khol|chalau|chalao|खोलदेउ|खोलनु|खोलो|खोल"
-private val ON_WORDS = setOf("on", "chalu", "चालु", "चालू", "अन", "chalau", "chalao")
-private val OFF_WORDS = setOf("off", "band", "bandh", "बन्द", "बंद", "अफ")
-private val TORCH_WORDS = setOf("torch", "flashlight", "टर्च", "फ्लैशलाइट")
-private val FILL_WORDS = setOf("gara", "garnu", "karo", "kar", "do", "deu", "dinu", "dijiye", "the", "turn", "switch", "गर", "गरनु", "करो", "कर", "देउ")
+// Nepali (Romanized or Devanagari): a small, conservative set. Anything unsure goes to Claude.
+internal val OPEN_WORDS = "khola|kholdeu|kholnu|khol|chalau|खोलदेउ|खोलनु|खोल"
+private val ON_WORDS = setOf("on", "chalu", "चालु", "अन", "chalau")
+private val OFF_WORDS = setOf("off", "band", "bandh", "बन्द", "अफ")
+internal val TORCH_WORDS = setOf("torch", "flashlight", "टर्च", "फ्लैशलाइट")
+private val FILL_WORDS = setOf("gara", "garnu", "deu", "dinu", "the", "turn", "switch", "गर", "गरनु", "देउ")
 
 /** "torch on gara", "flashlight band karo", "torch chalu": a torch word plus exactly one of on/off. */
 private fun multilingualTorch(t: String): LocalCommand.Torch? {
@@ -116,11 +116,11 @@ fun routeLocal(transcript: String, labels: () -> List<String>): LocalCommand? {
     if (Regex("^(open|show|pull down) (the )?quick settings( panel)?$").matches(t)) return LocalCommand.Nav("quick_settings")
 
     multilingualTorch(t)?.let { return it }
-    Regex("^(pachadi|peeche|pichhe|पछाडि|पीछे)( (jau|jao|ja|जाउ|जाओ))?$").find(t)?.let { return LocalCommand.Nav("back") }
-    Regex("^(home (jau|jao|ja)|होम( जाउ| जाओ)?)$").find(t)?.let { return LocalCommand.Nav("home") }
-    if (Regex("^volume (badhau|badhao|badha|बढाउ|बढ़ाओ)$").matches(t)) return LocalCommand.Volume("up")
-    if (Regex("^volume (ghatau|ghatao|ghata|घटाउ|घटाओ)$").matches(t)) return LocalCommand.Volume("down")
-    if (Regex("^volume (band|bandh)( gara| karo)?$").matches(t)) return LocalCommand.Volume("mute")
+    Regex("^(pachadi|पछाडि)( (jau|जाउ))?$").find(t)?.let { return LocalCommand.Nav("back") }
+    Regex("^(home jau|होम( जाउ)?)$").find(t)?.let { return LocalCommand.Nav("home") }
+    if (Regex("^volume (badhau|बढाउ)$").matches(t)) return LocalCommand.Volume("up")
+    if (Regex("^volume (ghatau|घटाउ)$").matches(t)) return LocalCommand.Volume("down")
+    if (Regex("^volume (band|bandh)( gara)?$").matches(t)) return LocalCommand.Volume("mute")
     Regex("^(?:(?:turn|switch) (on|off) (?:the )?|(?:turn|switch) (?:the )?)?(?:flashlight|torch)(?: (on|off))?$").find(t)?.let { m ->
         val state = m.groupValues[1].ifEmpty { m.groupValues[2] }
         if (state.isNotEmpty()) return LocalCommand.Torch(state == "on")
@@ -150,7 +150,7 @@ fun routeLocal(transcript: String, labels: () -> List<String>): LocalCommand? {
         val name = m.groupValues[1]
         if (name.split(' ').size <= 4) confidentApp(name, labels())?.let { return LocalCommand.OpenApp(it) }
     }
-    // "youtube kholo", "kholo youtube", "gmail chalau": the verb comes last (or first) in Nepali and Hindi
+    // "youtube kholo", "kholo youtube", "gmail chalau": the verb comes last (or first) in Nepali
     (Regex("^(.+?) (?:$OPEN_WORDS)$").find(t) ?: Regex("^(?:$OPEN_WORDS) (.+)$").find(t))?.let { m ->
         val name = m.groupValues[1].removeSuffix(" app").removePrefix("app ")
         if (name.split(' ').size <= 3 && name.split(' ').none { it in TORCH_WORDS }) confidentApp(name, labels())?.let { return LocalCommand.OpenApp(it) }

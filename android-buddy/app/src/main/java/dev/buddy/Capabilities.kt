@@ -117,7 +117,7 @@ private fun eventSpoken(e: CalEvent, zone: ZoneId, now: Long) =
     "${e.title.ifBlank { "an event" }} ${if (e.allDay) dayWord(e.startMs, now, zone) + " all day" else "at ${spokenTime(e.startMs, zone)}"}"
 
 /** Tools that only look. Anything else a request ran counts as an action. */
-private val READ_ONLY_TOOLS = setOf("screenshot", "zoom", "mouse_move", "wait", "list_apps", "read_calendar", "read_notifications", "device_status", "default_apps")
+private val READ_ONLY_TOOLS = setOf("screenshot", "zoom", "mouse_move", "wait", "list_apps", "read_calendar", "read_notifications", "device_status", "default_apps", "remember")
 
 fun isActionTool(name: String) = name !in READ_ONLY_TOOLS
 

@@ -143,7 +143,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             }
         }
         agent = ClaudeAgent(settings) { phoneContextText() }
-        control = PhoneControl(this, stage)
+        control = PhoneControl(this, stage, settings)
         drawing = DrawingOverlay(this).also { it.show() }
         bubble = BubbleOverlay(this, this).also {
             check(it.show()) { "couldn't draw the bubble. allow 'draw over other apps' in settings" }
@@ -364,18 +364,52 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         say(text)
     }
 
-    private fun phoneContextText(): String = try {
-        phoneContext(
-            "${Build.MANUFACTURER} ${Build.MODEL}", "Android ${Build.VERSION.RELEASE}",
-            appLabel(BuddyAccessibilityService.foregroundPackage?.takeIf { it != packageName }), defaultApps(),
-        )
-    } catch (e: RuntimeException) { "" }
+    /** What phone this is plus, if "Learn from me" is on, the notes Buddy has saved (both stay on the phone until sent to Claude). */
+    private fun phoneContextText(): String {
+        val phone = try {
+            phoneContext(
+                "${Build.MANUFACTURER} ${Build.MODEL}", "Android ${Build.VERSION.RELEASE}",
+                appLabel(BuddyAccessibilityService.foregroundPackage?.takeIf { it != packageName }), defaultApps(),
+            )
+        } catch (e: RuntimeException) { "" }
+        val memory = if (settings.learnFromMe) memoryContext(settings.notes) else ""
+        return listOf(phone, memory).filter { it.isNotBlank() }.joinToString("\n")
+    }
+
+    // region learned phrases
+
+    private var pendingAlias: Alias? = null
+    private var pendingJob: Job? = null
+
+    /** An app Claude picked for an unfamiliar phrase is kept if the user doesn't correct it (next words, or a minute of quiet). */
+    private fun offerAlias(alias: Alias) {
+        commitAlias()
+        pendingAlias = alias
+        pendingJob = scope.launch { delay(ALIAS_CONFIRM_MS); commitAlias() }
+    }
+
+    private fun commitAlias() {
+        val alias = pendingAlias ?: return
+        pendingAlias = null
+        pendingJob?.cancel(); pendingJob = null
+        if (settings.learnFromMe) settings.aliases = addAlias(settings.aliases, alias.phrase, alias.app)
+    }
+
+    private fun reviewAlias(transcript: String) {
+        if (pendingAlias == null) return
+        if (isCorrection(transcript)) { pendingJob?.cancel(); pendingJob = null; pendingAlias = null } else commitAlias()
+    }
+
+    // endregion
 
     /** Simple commands ("open YouTube", "flashlight on", "volume up", "go home") run right here, with no Claude call. */
     private suspend fun tryLocal(transcript: String): Boolean {
         val t0 = SystemClock.elapsedRealtime()
+        reviewAlias(transcript)
         val apps by lazy { launchableApps() }
-        val command = routeLocal(transcript) { apps.keys.toList() } ?: return false
+        val command = routeLocal(transcript) { apps.keys.toList() }
+            ?: (if (settings.learnFromMe) aliasCommand(transcript, settings.aliases) { apps.keys } else null)
+            ?: return false
         if (command is LocalCommand.Briefing) { speakBriefing(t0); return true }
         val done = when (command) {
             is LocalCommand.Briefing -> null
@@ -399,8 +433,12 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
 
     /** Claude API mode: let Claude look, tap, type and scroll until the request is done, then speak its answer. */
     private suspend fun act(obs: Observation, transcript: String) {
+        control.openedApp = null
         val text = agent.run(transcript, obs, control, this::agentStatus)
         drawing?.clear()
+        if (settings.learnFromMe) control.openedApp?.let { app ->
+            runCatching { aliasToLearn(transcript, app, launchableApps().keys.toList()) }.getOrNull()?.let(::offerAlias)
+        }
         // Open a follow-up window after a spoken answer, not after "done" for an action (no hot-mic surprises).
         replyEligible = shouldOpenFollowUp(settings.conversationMode, true, agent.acted, text)
         present(text, control.map)
@@ -717,6 +755,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         const val EXTRA_TEXT = "text"
         private const val EXTRA_RESULT_CODE = "result_code"
         private const val EXTRA_DATA = "projection_data"
+        private const val ALIAS_CONFIRM_MS = 60_000L
         private const val CHANNEL_ID = "buddy"
         private const val NOTIFICATION_ID = 1
         private const val A11Y_CHANNEL_ID = "buddy_a11y"
