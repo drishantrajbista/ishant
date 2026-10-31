@@ -1,0 +1,1 @@
+I built Buddy, an Android take on Clicky: hold the bubble, ask out loud, and a cursor flies across your phone and points at the answer. It speaks Nepali, answers in English, and in Claude API mode it taps the setting for you.
