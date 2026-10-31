@@ -186,6 +186,13 @@ update an app across different signing keys); after that, updates install over e
 restore the keystore from the copy you keep and recreate `keystore.properties` (`storeFile`, `storePassword`, `keyAlias`,
 `keyPassword`) next to `settings.gradle.kts`.
 
+## Play Store
+
+`release/buddy-release.aab` is the signed App Bundle (applicationId `dev.buddy`) for Google Play; build it with
+`./gradlew bundleRelease`. The `play/` folder has the privacy policy, store listing text, Data safety answers, the
+accessibility/sensitive-permissions declaration and a step-by-step `RELEASE-CHECKLIST.md`. The signing key is not in the
+repository (see *Signing*).
+
 ## Build
 
 Requires JDK 17+ and the Android SDK (platform 35, build-tools 35.0.0).
