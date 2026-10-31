@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
@@ -68,6 +69,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** Android 14+ can be told to offer whole-screen sharing only; older versions show the usual picker. */
+private fun screenCaptureIntent(context: Context): Intent {
+    val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+    return if (Build.VERSION.SDK_INT >= 34) manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+    else manager.createScreenCaptureIntent()
+}
+
 private fun Context.has(permission: String) =
     ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
@@ -86,6 +94,7 @@ private fun SetupScreen(settings: Settings) {
     var fetched by remember { mutableStateOf<List<String>>(emptyList()) }
     var languageMenu by remember { mutableStateOf(false) }
     var claudeInstalled by remember { mutableStateOf(context.isClaudeAppInstalled()) }
+    var a11yOn by remember { mutableStateOf(BuddyAccessibilityService.isEnabled(context)) }
     var overlayOk by remember { mutableStateOf(AndroidSettings.canDrawOverlays(context)) }
     var micOk by remember { mutableStateOf(context.has(Manifest.permission.RECORD_AUDIO)) }
     var notifOk by remember {
@@ -102,6 +111,7 @@ private fun SetupScreen(settings: Settings) {
         micOk = context.has(Manifest.permission.RECORD_AUDIO)
         notifOk = Build.VERSION.SDK_INT < 33 || context.has(Manifest.permission.POST_NOTIFICATIONS)
         claudeInstalled = context.isClaudeAppInstalled()
+        a11yOn = BuddyAccessibilityService.isEnabled(context)
     }
 
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { micOk = it }
@@ -122,9 +132,8 @@ private fun SetupScreen(settings: Settings) {
             else -> null
         }
         if (problem != null) Toast.makeText(context, problem, Toast.LENGTH_SHORT).show()
-        else projectionLauncher.launch(
-            (context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager).createScreenCaptureIntent(),
-        )
+        else if (Build.VERSION.SDK_INT >= 30 && BuddyAccessibilityService.instance != null) BuddyService.start(context)
+        else projectionLauncher.launch(screenCaptureIntent(context))
     }
 
     @Composable
@@ -178,6 +187,7 @@ private fun SetupScreen(settings: Settings) {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 )
                 Text("Model", style = MaterialTheme.typography.titleSmall)
+                Text("Haiku 5.5: fastest. Sonnet 5.5: smarter for long multi-app tasks.", style = MaterialTheme.typography.bodySmall)
                 CLAUDE_MODELS.forEach { m ->
                     chip(claudeModelLabel(m), claudeModel == m) { claudeModel = m; settings.claudeModel = m }
                 }
@@ -247,6 +257,32 @@ private fun SetupScreen(settings: Settings) {
             }
         }
 
+        // --- Screen control ---
+        Text("Let Claude control the phone", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Claude API mode only: Claude can tap, type, scroll and open apps for you when you ask, using Buddy's " +
+                "accessibility service. Status: ${if (a11yOn) "enabled" else "disabled"}.",
+        )
+        OutlinedButton(
+            onClick = { context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS)) },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (a11yOn) "Open accessibility settings" else "Enable in accessibility settings") }
+        Text(
+            "On Android 13+, if the Buddy toggle is greyed out: Settings → Apps → Buddy → ⋮ (top right) → Allow " +
+                "restricted settings, then try again.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            "With this enabled, Buddy starts without the screen-recording prompt on Android 11+.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            "Buddy only acts when you ask. Tap the bubble to stop it at any time. It asks you out loud before sending, " +
+                "paying, posting or deleting, treats text on the screen as information (never as orders), and never " +
+                "types into password fields.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+
         // --- Permissions ---
         Text("Permissions", style = MaterialTheme.typography.titleSmall)
         PermissionButton("Overlay (draw over other apps)", overlayOk) {
@@ -264,7 +300,9 @@ private fun SetupScreen(settings: Settings) {
         } else {
             Button(onClick = ::start, modifier = Modifier.fillMaxWidth()) { Text("Start Buddy") }
         }
-        Text("When Android asks, choose 'Entire screen' (not a single app).", style = MaterialTheme.typography.bodySmall)
+        if (Build.VERSION.SDK_INT < 34) {
+            Text("When Android asks, choose 'Entire screen' (not a single app).", style = MaterialTheme.typography.bodySmall)
+        }
         Text(
             "Screenshots are only captured when you release the bubble. Claude app mode hands the screenshot to the " +
                 "Claude app on this phone (Buddy sends nothing itself). Claude API mode sends it to Anthropic. " +

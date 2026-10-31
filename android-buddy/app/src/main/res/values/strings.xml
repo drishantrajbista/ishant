@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_description">Lets Buddy tap, type and read the screen when you ask it to. Buddy only acts on your voice requests, never types into password fields, and you can stop it any time by tapping its bubble.</string>
+</resources>

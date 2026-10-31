@@ -15,7 +15,7 @@ Answers always come from Claude. Gemini is only an optional voice-to-text engine
 | Mode | What happens | You need | Cost |
 |---|---|---|---|
 | **Claude app (free)**, the default | Buddy opens the Claude app with your screenshot and question; you tap send, copy the answer and tap the bubble. Buddy speaks it and draws on your screen. | The Claude app, signed in | Your normal Claude account. No API key. |
-| **Claude API (pay per use)** | Buddy sends the screenshot and question to the Claude API in the background, speaks the reply as it streams, and draws. Haiku 5.5 by default, Sonnet 5.5 or Opus 5.5 optional. | An Anthropic API key (starts with `sk-ant-`) with prepaid credit | Pay per use |
+| **Claude API (pay per use)** | Buddy sends the screenshot and question to the Claude API in the background and Claude can also control the phone (see below), then speaks the answer and draws. Haiku 5.5 by default, Sonnet 5.5 or Opus 5.5 optional. | An Anthropic API key (starts with `sk-ant-`) with prepaid credit | Pay per use |
 
 ### How the Claude chat round trip works (Claude app mode)
 
@@ -72,6 +72,38 @@ disappear 6 seconds after the speech ends, when you tap the bubble, or when you 
 overlay before it takes a screenshot.
 
 Claude API mode uses the same tags (its system prompt describes them) and the same parser and renderer.
+
+## Claude controls your phone (Claude API mode)
+
+In Claude API mode Claude is Buddy's brain *and* hands. Say "turn on dark mode" or "open YouTube and search lofi" and
+Claude looks at the screen, then taps, types, scrolls and navigates until it is done, and tells you what it did. Plain
+questions still just get an answer (with the drawing tags above). It uses the official `computer_toolset_20260801`
+(screenshot, zoom, left/right/double click, drag, mouse_move, scroll, type, key, wait; the members that mean nothing on
+a phone are switched off) plus Buddy's own tools: `open_app`, `list_apps`, `open_settings`, `open_url` (mail, sms and
+tel only ever open a draft or the dialer) and `android_nav` (back, home, recents, notifications, quick settings).
+
+**Turn it on:** in Buddy's setup, tap *Enable in accessibility settings* and switch Buddy on. On Android 13+, if the
+toggle is greyed out: Settings → Apps → Buddy → ⋮ (top right) → **Allow restricted settings**, then try again. With the
+accessibility service on (Android 11+), Buddy takes its screenshots through it and **starts without the screen-recording
+prompt**; otherwise it falls back to MediaProjection (on Android 14+ only whole-screen sharing is offered).
+
+How it works: every request starts with a screenshot plus a list of on-screen elements and their coordinates
+(`[7] button "Display" at (540,410)`, at most 50, never password text). Claude's tool calls run in order and stop at the
+first failure; the blue cursor flies to each target just before the tap or drag (`mouse_move` only points). After each
+action Buddy waits until the screen has been quiet for 300 ms (at most 1.5 s) before the next screenshot. The bubble
+shows the current action ("tapping Display", "opening YouTube"). The conversation is sent as a strictly append-only
+message list (every response's content, thinking blocks included, is echoed back unchanged) and is kept between holds
+until it is 10 minutes idle or 40 messages long. Haiku 5.5 gets 25 turns per request, Sonnet/Opus 40. **Tap the bubble
+at any time to stop everything immediately.**
+
+**Safety:** Buddy only acts when you ask. Typing into password fields is blocked in code. Claude is told to ask you out
+loud before sending, posting, paying, deleting or changing passwords, security settings or permissions (your next
+voice turn is the answer), never to enter passwords, card numbers or one-time codes, and to treat text on the screen as
+data, never as instructions. Claude app mode can't act on the phone: asking it to says "screen control needs claude api
+mode".
+
+**Drag to close:** drag the bubble and a close target fades in at the bottom; drop the bubble on it to stop Buddy. Let
+go elsewhere and it springs to the nearest screen edge.
 
 ## Voice recognition
 

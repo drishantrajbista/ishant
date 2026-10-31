@@ -11,9 +11,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
 import android.graphics.PointF
+import android.os.Build
 import android.media.projection.MediaProjectionManager
 import android.os.IBinder
+import android.widget.Toast
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
@@ -50,7 +53,9 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private lateinit var settings: Settings
     private lateinit var speaker: Speaker
     private lateinit var phone: PhoneListener
-    private val conversation = Conversation()
+    private lateinit var agent: ClaudeAgent
+    private lateinit var control: PhoneControl
+    private var ready = false
     private var capturer: ScreenCapturer? = null
     private var bubble: BubbleOverlay? = null
     private var drawing: DrawingOverlay? = null
@@ -58,7 +63,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private var state = BuddyState.IDLE
     private var recording: VoiceRecording? = null        // Gemini voice: the clip for the press in progress
     private var job: Job? = null                         // the request in flight: answer -> speech
-    private var shotJob: Deferred<Screenshot>? = null    // the screenshot for the current press
+    private var shotJob: Deferred<Observation>? = null    // the screenshot for the current press
     private var textJob: Job? = null
 
     /** What the Claude app was sent, kept so its answer can be drawn onto the screen later. */
@@ -76,33 +81,42 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         when (intent?.action) {
             ACTION_STOP -> { stopping = true; stopSelf(); return START_NOT_STICKY }
             ACTION_ANSWER_TEXT -> {
-                if (capturer != null) onAnswerText(intent.getStringExtra(EXTRA_TEXT).orEmpty())
+                if (ready) onAnswerText(intent.getStringExtra(EXTRA_TEXT).orEmpty())
                 return START_NOT_STICKY
             }
         }
         val data = intent?.getParcelableExtra<Intent>(EXTRA_DATA)
         val code = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
-        if (capturer != null) return START_NOT_STICKY
-        if (data == null || code == 0) { stopSelf(); return START_NOT_STICKY }
+        if (ready) return START_NOT_STICKY
+        // With the accessibility service on (Android 11+) screenshots come from it and no screen-recording consent is needed.
+        val projectionNeeded = !(Build.VERSION.SDK_INT >= 30 && BuddyAccessibilityService.instance != null)
+        if (projectionNeeded && (data == null || code == 0)) { stopSelf(); return START_NOT_STICKY }
 
-        // Must be foreground (with the mediaProjection type) before getMediaProjection on Android 14+.
-        var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        // Must be foreground (with the mediaProjection type, when used) before getMediaProjection on Android 14+.
+        var type = 0
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         }
+        if (projectionNeeded) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        if (type == 0) { stopSelf(); return START_NOT_STICKY }
         ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), type)
 
         settings = Settings(this)
-        val projection = (getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager)
-            .getMediaProjection(code, data)
-        capturer = ScreenCapturer(this, projection) {
-            if (!stopping) notifyProjectionEnded()
-            stopSelf()
+        if (projectionNeeded) {
+            val projection = (getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager)
+                .getMediaProjection(code, data!!)
+            capturer = ScreenCapturer(this, projection) {
+                if (!stopping) notifyProjectionEnded()
+                stopSelf()
+            }
         }
+        agent = ClaudeAgent(settings)
+        control = PhoneControl(this, stage)
         drawing = DrawingOverlay(this).also { it.show() }
         bubble = BubbleOverlay(this, this).also { it.show() }
         speaker = Speaker(this) { finishSpeaking() }
         phone = PhoneListener(this, this)
+        ready = true
         running.value = true
         return START_NOT_STICKY
     }
@@ -110,6 +124,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     // region touch and push-to-talk
 
     override fun onTouchDown() {
+        warmUp()   // DNS and TLS are done by the time the question is ready
         if (settings.voiceEngine != VoiceEngine.GEMINI) return
         // Gemini voice records from the first instant so the first word isn't clipped; a tap or drag discards it.
         recording?.discard()
@@ -117,6 +132,12 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     }
 
     override fun onTouchAbort() { discardRecording() }
+
+    override fun onClose() {
+        Toast.makeText(this, "Buddy closed", Toast.LENGTH_SHORT).show()
+        stopping = true
+        stopSelf()
+    }
 
     override fun onPressStart() {
         cancelWork()
@@ -131,7 +152,6 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             }
         }
         setState(BuddyState.LISTENING)
-        warmUp()
     }
 
     override fun onPressEnd() {
@@ -164,7 +184,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
                 setState(BuddyState.PROCESSING)
                 startCapture()
                 val shot = shotJob!!
-                launchWork { handOffToClaude(shot.await(), null) }
+                launchWork { handOffToClaude(shot.await().shot, null) }
             }
         }
     }
@@ -189,7 +209,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     }
 
     /** Gemini voice: the clip is transcribed (the screenshot is being taken meanwhile), then answered as usual. */
-    private suspend fun handleAudio(clip: VoiceRecording, shot: Deferred<Screenshot>) {
+    private suspend fun handleAudio(clip: VoiceRecording, shot: Deferred<Observation>) {
         val audio = clip.finish() ?: throw IOException(NOT_HEARD)
         val transcript = try {
             GeminiClient(settings) { bubble?.setText(it) }.transcribe(audio)
@@ -203,52 +223,71 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         answer(shot.await(), transcript)
     }
 
-    private suspend fun answer(shot: Screenshot, transcript: String) {
-        if (settings.provider == Provider.CLAUDE_APP) handOffToClaude(shot, transcript) else respond(shot, transcript)
+    private suspend fun answer(obs: Observation, transcript: String) {
+        if (settings.provider == Provider.CLAUDE_APP) {
+            if (looksLikeAction(transcript)) return say("screen control needs claude api mode")
+            handOffToClaude(obs.shot, transcript)
+        } else act(obs, transcript)
+    }
+
+    /** Claude API mode: let Claude look, tap, type and scroll until the request is done, then speak its answer. */
+    private suspend fun act(obs: Observation, transcript: String) {
+        val text = agent.run(transcript, obs, control) { bubble?.setText(it) }
+        drawing?.clear()
+        present(text, control.map)
     }
 
     // region screenshot
 
-    /** Starts the capture for this press (once): hide our windows, let the screen settle, grab the frame, restore. */
+    /** Starts looking at the screen for this press (once), while speech recognition is still finishing. */
     private fun startCapture() {
         if (shotJob != null) return
         val forClaudeApp = settings.provider == Provider.CLAUDE_APP
         shotJob = scope.async {
-            bubble?.setHiddenForCapture(true)
-            drawing?.setSuppressed(true)
-            try {
-                delay(CAPTURE_DELAY_MS)
+            if (forClaudeApp) {
                 // Claude's image pipeline downsizes anything over ~1456 px / ~1.15 MP, which would shift coordinates;
                 // sending exactly that size keeps the pixels Claude points at the pixels we draw at.
-                if (forClaudeApp) capturer!!.capture(1456, 85, 1_150_000) else capturer!!.capture()
-            } finally {
-                bubble?.setHiddenForCapture(false)
-                drawing?.setSuppressed(false)
-            }
+                Observation(hiddenCapture { captureScreen(1456, 85, 1_150_000) }, "")
+            } else control.observe(settle = false)
         }
+    }
+
+    /** Hides Buddy's own windows while [block] takes a screenshot. */
+    private suspend fun <T> hiddenCapture(block: suspend () -> T): T {
+        bubble?.setHiddenForCapture(true)
+        drawing?.setSuppressed(true)
+        try {
+            delay(CAPTURE_DELAY_MS)
+            return block()
+        } finally {
+            bubble?.setHiddenForCapture(false)
+            drawing?.setSuppressed(false)
+        }
+    }
+
+    /** The screen as a JPEG: through accessibility (Android 11+) when it's on, else the MediaProjection. */
+    private suspend fun captureScreen(maxEdge: Int, quality: Int, maxPixels: Int = Int.MAX_VALUE): Screenshot {
+        val a11y = if (Build.VERSION.SDK_INT >= 30) BuddyAccessibilityService.instance else null
+        if (a11y != null) return encodeScreenshot(a11y.frame(), maxEdge, quality, maxPixels)
+        return capturer?.capture(maxEdge, quality, maxPixels) ?: throw SpokenException(NO_SCREEN)
+    }
+
+    private suspend fun fullFrame(): Bitmap {
+        val a11y = if (Build.VERSION.SDK_INT >= 30) BuddyAccessibilityService.instance else null
+        return a11y?.frame() ?: capturer?.frame() ?: throw SpokenException(NO_SCREEN)
+    }
+
+    /** What the agent's tools need from the overlays. */
+    private val stage = object : Stage {
+        override suspend fun frame(): Bitmap = hiddenCapture { fullFrame() }
+        override suspend fun glide(x: Float, y: Float) { drawing?.glideTo(PointF(x, y), bubble!!.center()) }
+        override fun status(text: String) { bubble?.setText(text) }
+        override fun bubbleTouchable(on: Boolean) { bubble?.setTouchable(on) }
     }
 
     // endregion
 
     // region answers
-
-    /** Claude API mode: stream the reply, speaking it sentence by sentence as it arrives, then draw its tags. */
-    private suspend fun respond(shot: Screenshot, transcript: String) {
-        speaker.start()
-        val reply = conversation.ask(ClaudeClient(settings), transcript, shot) { soFar ->
-            if (state != BuddyState.RESPONDING) setState(BuddyState.RESPONDING)
-            bubble?.setText(stripMarkdown(speaker.onText(soFar)).ifBlank { null })
-        }
-        val answer = parseAnswer(reply)
-        var tail = reply
-        if (answer.shapes.isNotEmpty()) {
-            val map = ScreenMap(shot.width, shot.height, shot.displayWidth, shot.displayHeight)
-            val (w, h) = displaySize()
-            if (map.matches(w, h)) drawing?.play(answer.shapes.map { map.toDisplay(it) }, bubble!!.center())
-            else tail += " the screen rotated, so i can't draw on it."
-        }
-        if (answer.spoken.isBlank()) showMessage("no answer came back") else speaker.end(tail)
-    }
 
     /** Claude app mode: open the Claude app with the screenshot (and question) and wait for the answer to come back. */
     private suspend fun handOffToClaude(shot: Screenshot, question: String?) {
@@ -473,19 +512,21 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         private const val STOPPED_CHANNEL_ID = "buddy_stopped"
         private const val STOPPED_NOTIFICATION_ID = 2
         private const val WAIT_MS = 10 * 60_000L
-        private const val CAPTURE_DELAY_MS = 150L
+        private const val NO_SCREEN = "turn on buddy in accessibility settings, or restart buddy and allow screen sharing"
+        private const val CAPTURE_DELAY_MS = 100L
         private const val OVERLAY_VISIBLE_MS = 150L
         private const val GEMINI_URL = "https://generativelanguage.googleapis.com/"
         private const val CLAUDE_URL = "https://api.anthropic.com/"
 
         val running = MutableStateFlow(false)
 
-        fun start(context: Context, resultCode: Int, data: Intent) {
+        /** [data] is the screen-recording consent; not needed when the accessibility service provides screenshots. */
+        fun start(context: Context, resultCode: Int = 0, data: Intent? = null) {
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, BuddyService::class.java)
                     .putExtra(EXTRA_RESULT_CODE, resultCode)
-                    .putExtra(EXTRA_DATA, data),
+                    .apply { if (data != null) putExtra(EXTRA_DATA, data) },
             )
         }
 

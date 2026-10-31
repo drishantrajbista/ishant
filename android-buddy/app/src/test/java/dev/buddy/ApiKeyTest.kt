@@ -37,6 +37,8 @@ class ApiKeyTest {
             claudeErrorMessage(400, """{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}"""),
         )
         assertNull(claudeErrorMessage(400, """{"error":{"message":"max_tokens: too large"}}"""))
-        assertNull(claudeErrorMessage(429, "{}"))
+        assertEquals("claude is rate limited, try again in a minute", claudeErrorMessage(429, "{}"))
+        assertEquals("claude is having trouble right now, try again in a moment", claudeErrorMessage(529, "{}"))
+        assertNull(claudeErrorMessage(404, "{}"))
     }
 }

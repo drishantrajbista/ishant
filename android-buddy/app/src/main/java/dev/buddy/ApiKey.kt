@@ -14,5 +14,7 @@ fun claudeErrorMessage(code: Int, body: String): String? = when {
     code == 401 || code == 403 -> "claude rejected the api key. check it in settings"
     code == 400 && Regex("credit|billing", RegexOption.IGNORE_CASE).containsMatchIn(body) ->
         "add credit at console.anthropic.com"
+    code == 429 -> "claude is rate limited, try again in a minute"
+    code >= 500 -> "claude is having trouble right now, try again in a moment"
     else -> null
 }

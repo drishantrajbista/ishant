@@ -18,6 +18,8 @@ import android.view.View
 import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.animation.LinearInterpolator
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -75,6 +77,13 @@ class DrawingOverlay(private val context: Context) {
         finished = false
         speechDone = false
         view.play(shapes, from) { finished = true; clearSoon() }
+    }
+
+    /** Agent mode: the cursor glides to [to] (screen px) in [ms]. It stays on screen until [clear]. Suspends until there. */
+    suspend fun glideTo(to: PointF, from: PointF, ms: Long = 200) = suspendCancellableCoroutine<Unit> { cont ->
+        handler.removeCallbacks(clearLater)
+        view.glide(to, from, ms) { if (cont.isActive) cont.resume(Unit) }
+        cont.invokeOnCancellation { view.stopAnimation() }
     }
 
     /** The reply has been spoken: the drawings stay a little longer, then go. */
@@ -192,6 +201,23 @@ class DrawingOverlay(private val context: Context) {
                 })
                 start()
             }
+        }
+
+        fun stopAnimation() { cancelled = true; anim?.cancel(); anim = null; steps.clear() }
+
+        fun glide(to: PointF, from: PointF, ms: Long, done: () -> Unit) {
+            stopAnimation()
+            visibility = if (suppressed) GONE else VISIBLE
+            val loc = IntArray(2).also { getLocationOnScreen(it) }
+            val start = cursor ?: PointF(from.x - loc[0], from.y - loc[1])
+            val end = PointF(to.x - loc[0], to.y - loc[1])
+            cancelled = false
+            onDone = done
+            cursor = start
+            steps += Step(ms, AccelerateDecelerateInterpolator()) { t ->
+                cursor = PointF(start.x + (end.x - start.x) * t, start.y + (end.y - start.y) * t)
+            }
+            next()
         }
 
         fun clear() {

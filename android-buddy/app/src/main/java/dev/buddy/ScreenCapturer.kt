@@ -113,6 +113,20 @@ class ScreenCapturer(context: Context, private val projection: MediaProjection, 
         Screenshot(out.toByteArray(), scaled.width, scaled.height, w, h)
     }
 
+    /** The newest frame at full resolution (a copy the caller owns). */
+    suspend fun frame(): Bitmap = withContext(Dispatchers.Default) {
+        resizeIfRotated()
+        val w = width
+        val h = height
+        var bitmap: Bitmap? = null
+        var tries = 0
+        while (bitmap == null && tries++ < 40) {
+            bitmap = synchronized(lock) { latest?.takeIf { it.width == w && it.height == h }?.toBitmap(1f) }
+            if (bitmap == null) delay(50)
+        }
+        bitmap ?: error("No screen frame available yet")
+    }
+
     /** Copies the frame (dropping row padding) and scales it in one pass. */
     private fun Image.toBitmap(scale: Float): Bitmap {
         val plane = planes[0]
@@ -137,4 +151,17 @@ class ScreenCapturer(context: Context, private val projection: MediaProjection, 
 /** True if every sampled pixel is essentially black (luminance < 8): a capture that only shares a single app. */
 fun isBlankFrame(pixels: IntArray): Boolean = pixels.isNotEmpty() && pixels.all {
     0.299 * (it shr 16 and 0xFF) + 0.587 * (it shr 8 and 0xFF) + 0.114 * (it and 0xFF) < 8
+}
+
+/** Scales a full-resolution frame to [maxEdge]/[maxPixels] and JPEG-encodes it (the model's view of the screen). */
+fun encodeScreenshot(full: Bitmap, maxEdge: Int, quality: Int, maxPixels: Int = Int.MAX_VALUE): Screenshot {
+    val scale = scaleFor(full.width, full.height, maxEdge, maxPixels)
+    val scaled = if (scale < 1f) {
+        Bitmap.createScaledBitmap(full, (full.width * scale).toInt(), (full.height * scale).toInt(), true)
+    } else full
+    val sample = IntArray(100) { scaled.getPixel((it % 10 * 2 + 1) * scaled.width / 20, (it / 10 * 2 + 1) * scaled.height / 20) }
+    if (isBlankFrame(sample)) throw SpokenException("the screen came out blank. it may be protected from screenshots")
+    val out = ByteArrayOutputStream()
+    scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
+    return Screenshot(out.toByteArray(), scaled.width, scaled.height, full.width, full.height)
 }

@@ -163,18 +163,6 @@ class HandoffTest {
     }
 }
 
-class SentenceSplitTest {
-    @Test fun sentencesAreCompleteOnlyAfterWhitespace() {
-        assertEquals(0, sentenceEnd("hello there", 0))
-        assertEquals(0, sentenceEnd("hello there.", 0))   // no whitespace after the full stop yet
-        assertEquals(13, sentenceEnd("hello there. wor", 0))
-        assertEquals(13, sentenceEnd("hello there. wor", 13))
-        assertEquals(26, sentenceEnd("hello there. how are you? i", 0))
-        assertEquals(7, sentenceEnd("line 1\nline", 0))
-        assertEquals(0, sentenceEnd("it costs 3.5 dollars", 0))
-    }
-}
-
 class BlankFrameTest {
     @Test fun allBlackIsBlank() = assertTrue(isBlankFrame(IntArray(100) { 0xFF000000.toInt() }))
     @Test fun nearBlackIsStillBlank() = assertTrue(isBlankFrame(IntArray(100) { 0xFF050505.toInt() }))
