@@ -8,7 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** What Claude sees at the start of a request and after each `screenshot`: the image and the element list. */
-class Observation(val shot: Screenshot, val elements: String)
+class Observation(val shot: Screenshot, val elements: String, val cropped: Boolean = false)
 
 /** The phone as the agent sees it. Throws [ToolError] when an action can't be done. */
 interface Phone {
@@ -106,7 +106,10 @@ class ClaudeAgent(private val settings: Settings, private val phoneContext: () -
         }
     }
 
-    private fun screenText(o: Observation) =
+    private fun screenText(o: Observation) = if (o.cropped) {
+        "image 1 is a cropped region of the screen that the user chose (${o.shot.width}x${o.shot.height} pixels), not the whole screen. " +
+            "its coordinates do not match the display: answer questions about it, and call screenshot before tapping or pointing."
+    } else
         "screen 1 (image dimensions: ${o.shot.width}x${o.shot.height} pixels). screen elements, coordinates in " +
             "screenshot pixels:\n${o.elements}"
 

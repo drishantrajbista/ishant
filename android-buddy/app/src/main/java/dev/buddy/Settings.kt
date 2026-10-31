@@ -117,6 +117,11 @@ class Settings(context: Context) : QuotaStore {
         get() = str("learn", "1") == "1"
         set(v) = put("learn", if (v) "1" else "0")
 
+    /** "Keep transcript": every exchange is saved in a file on this phone (last 300), never synced. */
+    var keepTranscript: Boolean
+        get() = str("keep_transcript", "1") == "1"
+        set(v) = put("keep_transcript", if (v) "1" else "0")
+
     var notes: List<String>
         get() = decodeNotes(prefs.getString("memory_notes", "").orEmpty())
         set(v) = prefs.edit().putString("memory_notes", encodeNotes(v)).apply()

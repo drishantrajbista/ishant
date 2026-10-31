@@ -49,9 +49,15 @@ fun scaleFor(w: Int, h: Int, maxEdge: Int, maxPixels: Int = Int.MAX_VALUE): Floa
     minOf(1f, maxEdge.toFloat() / max(w, h), sqrt(maxPixels.toDouble() / (w.toLong() * h)).toFloat())
 
 /** The text that goes to the Claude app with the screenshot (and to the clipboard). */
-fun handoffText(question: String, w: Int, h: Int, draw: Boolean): String =
-    if (!draw) question
-    else "$question\n\n[buddy: my screenshot is ${w}x$h px. answer to the point in one short sentence in english (more only if i ask), no markdown. " +
+fun handoffText(question: String, w: Int, h: Int, draw: Boolean, recent: String = "", cropped: Boolean = false): String {
+    val context = if (recent.isBlank()) "" else "\n\n[buddy: $recent]"
+    if (cropped) return "$question$context\n\n[buddy: the image is a cropped part of my screen. answer to the point in one short sentence in english, no markdown.]"
+    return question + context + handoffTags(w, h, draw)
+}
+
+private fun handoffTags(w: Int, h: Int, draw: Boolean): String =
+    if (!draw) ""
+    else "\n\n[buddy: my screenshot is ${w}x$h px. answer to the point in one short sentence in english (more only if i ask), no markdown. " +
         "to show me on screen add tags in screenshot pixels: [POINT:x,y:label] [CIRCLE:x,y,r] [BOX:x1,y1,x2,y2] " +
         "[ARROW:x1,y1,x2,y2] [LINE:x1,y1,x2,y2] [PATH:x1,y1,x2,y2,...] [TEXT:x,y:words]]"
 

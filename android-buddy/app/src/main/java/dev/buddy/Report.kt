@@ -18,6 +18,8 @@ class ReportInfo(
     val crash: String? = null,
     /** The full key, only used to scrub it out of free text; never printed. */
     val secretToScrub: String = "",
+    /** How many exchanges the transcript holds (a count only, never the contents). */
+    val transcriptCount: Int = 0,
 )
 
 /** Plain text for "Copy report". Contains no API key: just its last 4 characters. */
@@ -32,6 +34,7 @@ fun buildReport(i: ReportInfo): String {
         appendLine("Model: ${i.model}")
         appendLine("Voice engine: ${i.voice}")
         appendLine("Claude key: ${i.keyMasked}")
+        appendLine("Transcript: ${i.transcriptCount} saved (contents not included)")
         appendLine()
         appendLine("Checks:")
         if (i.checks.isEmpty()) appendLine("(not run yet)")

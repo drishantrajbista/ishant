@@ -12,7 +12,12 @@ import android.provider.Settings as AndroidSettings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.AlertDialog
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Row
@@ -148,6 +153,8 @@ private class AppState(private val context: Context, val settings: Settings) {
     var calendarOk by mutableStateOf(false)
     var conversation by mutableStateOf(settings.conversationMode)
     var learn by mutableStateOf(settings.learnFromMe)
+    var keepTranscript by mutableStateOf(settings.keepTranscript)
+    var transcriptCount by mutableStateOf(0)
     var notes by mutableStateOf(settings.notes)
     var aliases by mutableStateOf(settings.aliases)
     var modeNote by mutableStateOf<String?>(null)
@@ -169,6 +176,7 @@ private class AppState(private val context: Context, val settings: Settings) {
         crashText = CrashLog.read(context)
         calendarOk = context.hasCalendarPermission()
         claudeInstalled = context.isClaudeAppInstalled()
+        transcriptCount = TranscriptStore.entries(context).size
         notes = settings.notes   // Buddy may have saved something while this screen was closed
         aliases = settings.aliases
     }
@@ -190,6 +198,7 @@ private class AppState(private val context: Context, val settings: Settings) {
     fun saveAccent(tag: String) { voiceAccent = tag; settings.voiceAccent = tag }
     fun setDraw(on: Boolean) { drawTags = on; settings.drawTags = on }
     fun saveConversation(on: Boolean) { conversation = on; settings.conversationMode = on }
+    fun saveKeep(on: Boolean) { keepTranscript = on; settings.keepTranscript = on }
     fun saveLearn(on: Boolean) { learn = on; settings.learnFromMe = on }
     fun deleteNote(note: String) { notes = notes - note; settings.notes = notes }
     fun deleteAlias(alias: Alias) { aliases = aliases - alias; settings.aliases = aliases }
@@ -213,6 +222,7 @@ private fun BuddyApp(settings: Settings) {
     val state = remember { AppState(context, settings) }
     val running by BuddyService.running.collectAsState()
     var onboarding by remember { mutableStateOf(!settings.onboarded) }
+    var showTranscript by remember { mutableStateOf(false) }
 
     val appScope = rememberCoroutineScope()
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
@@ -256,7 +266,8 @@ private fun BuddyApp(settings: Settings) {
     )
 
     if (onboarding) Onboarding(state, actions) { settings.onboarded = true; onboarding = false }
-    else Home(state, actions, running)
+    else if (showTranscript) TranscriptScreen(state) { showTranscript = false; state.refresh() }
+    else Home(state, actions, running) { showTranscript = true }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -407,7 +418,7 @@ private fun StartCapsule(running: Boolean, status: String, actions: Actions) {
 // Home
 
 @Composable
-private fun Home(state: AppState, actions: Actions, running: Boolean) {
+private fun Home(state: AppState, actions: Actions, running: Boolean, openTranscript: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val live by BuddyService.live.collectAsState()
@@ -620,6 +631,17 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
             }
             Footnote("Stored only on this phone. Notes go to Claude only as context in your own requests.")
 
+            // --- Transcript ---
+            SectionHeader("Transcript")
+            GroupCard {
+                SettingRow("Keep transcript", "Saves what you say and what Buddy answers, the last 300. Off: nothing is saved.", Icons.Default.Info, Tint.Blue) {
+                    MinimalSwitch(state.keepTranscript) { state.saveKeep(it) }
+                }
+                Hairline()
+                SettingRow("Chat transcript", "${state.transcriptCount} saved", Icons.Default.Search, Tint.Grey, onClick = openTranscript) { Chevron() }
+            }
+            Footnote("Stored only on this phone, never synced.")
+
             // --- Control ---
             SectionHeader("Control")
             GroupCard {
@@ -664,7 +686,7 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
                         version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty(),
                         device = "${Build.MANUFACTURER} ${Build.MODEL}", android = "Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})",
                         mode = state.provider.name, model = state.claudeModel, voice = state.voice.name,
-                        keyMasked = maskKey(state.settings.claudeKey), checks = checks, timing = TimingLog.entries(),
+                        keyMasked = maskKey(state.settings.claudeKey), transcriptCount = state.transcriptCount, checks = checks, timing = TimingLog.entries(),
                         lastError = TimingLog.lastError, crash = state.crashText.takeIf { it.isNotBlank() }, secretToScrub = state.settings.claudeKey,
                     )
                     (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
@@ -711,6 +733,88 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
             Text("Buddy", style = MaterialTheme.typography.titleMedium, color = colors.label)
         }
     }
+}
+
+/** Every saved exchange, newest first by day, with search, copy and delete. */
+@Composable
+private fun TranscriptScreen(state: AppState, back: () -> Unit) {
+    val context = LocalContext.current
+    BackHandler(onBack = back)
+    var all by remember { mutableStateOf(TranscriptStore.entries(context)) }
+    var query by remember { mutableStateOf("") }
+    var confirmClear by remember { mutableStateOf(false) }
+    val groups = remember(all, query) { groupByDay(searchExchanges(all, query)) }
+    val today = remember { java.time.LocalDate.now() }
+    val timeFormat = remember { java.time.format.DateTimeFormatter.ofPattern("h:mm a") }
+    val dayFormat = remember { java.time.format.DateTimeFormatter.ofPattern("EEE d MMM yyyy") }
+    fun dayLabel(d: java.time.LocalDate) = when (d) { today -> "Today"; today.minusDays(1) -> "Yesterday"; else -> d.format(dayFormat) }
+    fun refresh() { all = TranscriptStore.entries(context); state.transcriptCount = all.size }
+
+    Box(Modifier.fillMaxSize().background(colors.background)) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+            item {
+                androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = colors.accent, modifier = Modifier.pressable(back).padding(8.dp))
+                    Text("Transcript", Modifier.weight(1f).padding(start = 4.dp), style = MaterialTheme.typography.titleLarge, color = colors.label)
+                    if (all.isNotEmpty()) Text("Clear all", color = colors.error, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.pressable { confirmClear = true }.padding(8.dp))
+                }
+                Spacer(Modifier.height(8.dp))
+                GroupCard {
+                    SettingRow("Keep transcript", "Stored only on this phone.", Icons.Default.Info, Tint.Blue) {
+                        MinimalSwitch(state.keepTranscript) { state.saveKeep(it) }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = query, onValueChange = { query = it }, label = { Text("Search") }, singleLine = true,
+                    shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(),
+                )
+                if (groups.isEmpty()) Footnote(if (all.isEmpty()) "Nothing saved yet. Your questions and Buddy's answers will show up here." else "No matches.")
+            }
+            groups.forEach { (day, entries) ->
+                item(key = "day-$day") { SectionHeader(dayLabel(day)) }
+                items(entries.size, key = { "${entries[it].at}-${entries[it].user.hashCode()}" }) { i ->
+                    val e = entries[i]
+                    GroupCard {
+                        Column(Modifier.padding(16.dp)) {
+                            val time = java.time.Instant.ofEpochMilli(e.at).atZone(java.time.ZoneId.systemDefault()).format(timeFormat)
+                            Text("$time · ${e.mode}", style = MaterialTheme.typography.labelSmall, color = colors.labelTertiary)
+                            Spacer(Modifier.height(6.dp))
+                            SelectionContainer {
+                                Column {
+                                    Text(e.user, style = MaterialTheme.typography.bodyLarge, color = colors.label, fontWeight = FontWeight.SemiBold)
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(e.reply, style = MaterialTheme.typography.bodyMedium, color = colors.labelSecondary)
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            androidx.compose.foundation.layout.Row {
+                                Text("Copy", color = colors.accent, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.pressable {
+                                        (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                                            .setPrimaryClip(android.content.ClipData.newPlainText("Buddy", "${e.user}\n${e.reply}"))
+                                        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                                    }.padding(vertical = 4.dp, horizontal = 2.dp))
+                                Spacer(Modifier.width(20.dp))
+                                Text("Delete", color = colors.error, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.pressable { TranscriptStore.delete(context, e); refresh() }.padding(vertical = 4.dp, horizontal = 2.dp))
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                }
+            }
+            item { Spacer(Modifier.height(40.dp)) }
+        }
+    }
+    if (confirmClear) AlertDialog(
+        onDismissRequest = { confirmClear = false },
+        title = { Text("Clear the whole transcript?") },
+        text = { Text("This deletes ${all.size} saved exchanges from this phone.") },
+        confirmButton = { TextButton({ TranscriptStore.clear(context); refresh(); confirmClear = false }) { Text("Clear all", color = colors.error) } },
+        dismissButton = { TextButton({ confirmClear = false }) { Text("Cancel") } },
+    )
 }
 
 @Composable

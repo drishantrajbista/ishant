@@ -12,6 +12,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.PointF
 import android.os.Build
 import android.media.projection.MediaProjectionManager
@@ -74,6 +75,10 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         val shotW: Int, val shotH: Int, val displayW: Int, val displayH: Int,
         val question: String?, val copied: String?,
     )
+    private var sessionRecent: List<Exchange> = emptyList()   // the last few exchanges, kept in memory even if the transcript is off
+    private var pendingCrop: Screenshot? = null               // a cropped screenshot waiting for the next question
+    private var pendingCropAt = 0L
+    private var cropView: CropOverlay? = null
     private var handoff: Handoff? = null    // non-null while an answer from the Claude app is awaited
     private var waitJob: Job? = null
     private val followUp = FollowUp()                // the hands-free follow-up listening window
@@ -109,6 +114,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private fun startUp(intent: Intent?): Int {
         when (intent?.action) {
             ACTION_STOP -> { stopping = true; stopSelf(); return START_NOT_STICKY }
+            ACTION_CROP -> { if (ready) startCrop(); return START_NOT_STICKY }
             ACTION_ANSWER_TEXT -> {
                 if (ready) onAnswerText(intent.getStringExtra(EXTRA_TEXT).orEmpty())
                 return START_NOT_STICKY
@@ -287,7 +293,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
                 setState(BuddyState.PROCESSING)
                 startCapture()
                 val shot = shotJob!!
-                launchWork { handOffToClaude(shot.await().shot, null) }
+                launchWork { val obs = shot.await(); pendingCrop = null; handOffToClaude(obs.shot, null, obs.cropped) }
             }
         }
     }
@@ -344,15 +350,16 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         try {
             if (settings.provider == Provider.CLAUDE_APP) {
                 if (looksLikeAction(transcript)) return say("screen control needs claude api mode. switch it in buddy's settings")
-                handOffToClaude(obs.shot, transcript)
-            } else act(obs, transcript)
+                pendingCrop = null
+                handOffToClaude(obs.shot, transcript, obs.cropped)
+            } else { pendingCrop = null; act(obs, transcript) }
         } finally {
             TimingLog.record("total", SystemClock.elapsedRealtime() - pressEndAt, settings.provider.name)
         }
     }
 
     /** "What's my day": a short spoken summary from the clock, calendar and notifications that are allowed. */
-    private suspend fun speakBriefing(t0: Long) {
+    private suspend fun speakBriefing(t0: Long, transcript: String) {
         shotJob?.cancel(); shotJob = null
         val events = if (hasCalendarPermission()) withContext(Dispatchers.IO) { runCatching { upcomingEvents(10) }.getOrNull() } else null
         val notifications = if (notificationAccessEnabled()) NotificationStore.entries() else null
@@ -361,6 +368,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         TimingLog.record("local", SystemClock.elapsedRealtime() - t0, "briefing")
         TimingLog.record("total", SystemClock.elapsedRealtime() - pressEndAt, "local")
         replyEligible = settings.conversationMode
+        record(transcript, text, "local")
         say(text)
     }
 
@@ -373,8 +381,45 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             )
         } catch (e: RuntimeException) { "" }
         val memory = if (settings.learnFromMe) memoryContext(settings.notes) else ""
-        return listOf(phone, memory).filter { it.isNotBlank() }.joinToString("\n")
+        return listOf(phone, memory, recentContext(recentList())).filter { it.isNotBlank() }.joinToString("\n")
     }
+
+    // region transcript and follow-up context
+
+    private fun spokenOf(raw: String) = stripMarkdown(parseAnswer(raw).spoken)
+
+    /** Saves one exchange: in memory for follow-up context, and in the on-device transcript if "Keep transcript" is on. */
+    private fun record(user: String, reply: String, mode: String) {
+        if (reply.isBlank() || user.isBlank()) return
+        val ex = Exchange(System.currentTimeMillis(), user, reply, mode)
+        sessionRecent = addExchange(sessionRecent, ex).takeLast(RECENT_EXCHANGES)
+        if (settings.keepTranscript) scope.launch(Dispatchers.IO) { runCatching { TranscriptStore.add(this@BuddyService, ex) } }
+    }
+
+    private fun recentList() = if (settings.keepTranscript) TranscriptStore.entries(this) else sessionRecent
+
+    // endregion
+
+    // region cropped screenshot
+
+    /** "Screenshot & crop": capture the screen (without Buddy's windows), let the user drag a rectangle, keep it for the next question. */
+    private fun startCrop() {
+        if (cropView != null || state != BuddyState.IDLE) return
+        cancelWork()
+        launchWork {
+            delay(CROP_SHADE_MS)   // the notification shade is closing
+            val bytes = hiddenCapture { captureScreen(2000, 90) }.jpeg
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: throw SpokenException("couldn't capture the screen")
+            val overlay = CropOverlay(this@BuddyService, bitmap) { crop ->
+                cropView = null
+                if (crop == null) showMessage("crop cancelled", 1500)
+                else { pendingCrop = crop; pendingCropAt = SystemClock.elapsedRealtime(); showMessage("cropped. hold me and ask about it", 6000) }
+            }
+            if (overlay.show()) cropView = overlay else throw SpokenException("couldn't show the crop view")
+        }
+    }
+
+    // endregion
 
     // region learned phrases
 
@@ -410,7 +455,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         val command = routeLocal(transcript) { apps.keys.toList() }
             ?: (if (settings.learnFromMe) aliasCommand(transcript, settings.aliases) { apps.keys } else null)
             ?: return false
-        if (command is LocalCommand.Briefing) { speakBriefing(t0); return true }
+        if (command is LocalCommand.Briefing) { speakBriefing(t0, transcript); return true }
         val done = when (command) {
             is LocalCommand.Briefing -> null
             is LocalCommand.Alarm -> try { setAlarm(command.hour, command.minute, null); "alarm set for ${clockText(command.hour, command.minute)}" } catch (e: ToolError) { null }
@@ -424,6 +469,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
                 startActivity(Intent(settingsAction(command.page)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); "${command.page} settings"
             } catch (e: Exception) { null }
         } ?: return false   // can't do it here (e.g. accessibility is off): let Claude explain
+        record(transcript, done, "local")
         TimingLog.record("local", SystemClock.elapsedRealtime() - t0, done)
         TimingLog.record("total", SystemClock.elapsedRealtime() - pressEndAt, "local")
         bubble?.buzz()
@@ -441,7 +487,8 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         }
         // Open a follow-up window after a spoken answer, not after "done" for an action (no hot-mic surprises).
         replyEligible = shouldOpenFollowUp(settings.conversationMode, true, agent.acted, text)
-        present(text, control.map)
+        record(transcript, spokenOf(text), "claude api")
+        present(text, if (obs.cropped) null else control.map)   // a crop's pixels aren't the display's
     }
 
     // region screenshot
@@ -450,6 +497,10 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private fun startCapture() {
         if (shotJob != null) return
         val forClaudeApp = settings.provider == Provider.CLAUDE_APP
+        pendingCrop?.takeIf { SystemClock.elapsedRealtime() - pendingCropAt < CROP_KEEP_MS }?.let { crop ->
+            shotJob = scope.async { Observation(crop, "", cropped = true) }   // the next question uses the crop instead of the screen
+            return
+        }
         shotJob = scope.async {
             if (forClaudeApp) {
                 // Claude's image pipeline downsizes anything over ~1456 px / ~1.15 MP, which would shift coordinates;
@@ -498,12 +549,12 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     // region answers
 
     /** Claude app mode: open the Claude app with the screenshot (and question) and wait for the answer to come back. */
-    private suspend fun handOffToClaude(shot: Screenshot, question: String?) {
+    private suspend fun handOffToClaude(shot: Screenshot, question: String?, cropped: Boolean) {
         setState(BuddyState.IDLE)
         // Android 15 only lets SYSTEM_ALERT_WINDOW apps start activities from the background while one of their
         // overlay windows is visible, so make sure the bubble is back on screen first.
         delay(OVERLAY_VISIBLE_MS)
-        val text = question?.let { handoffText(it, shot.width, shot.height, settings.drawTags) }
+        val text = question?.let { handoffText(it, shot.width, shot.height, settings.drawTags, recentLine(recentList()), cropped) }
         try {
             shareToClaudeApp(shot.jpeg, text)
             handoff = Handoff(shot.width, shot.height, shot.displayWidth, shot.displayHeight, question, text)
@@ -540,6 +591,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         }
         cancelWork()
         endWaiting()
+        h?.question?.let { record(it, spokenOf(text), "claude app") }
         present(text, h?.let { ScreenMap(it.shotW, it.shotH, it.displayW, it.displayH) })
     }
 
@@ -691,12 +743,17 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             Intent(this, ClipboardActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION),
             PendingIntent.FLAG_IMMUTABLE,
         )
+        val crop = PendingIntent.getService(
+            this, 2, Intent(this, BuddyService::class.java).setAction(ACTION_CROP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_buddy)
             .setContentTitle("Buddy is running")
             .setContentText("Hold the floating bubble to talk")
             .setContentIntent(open)
             .setOngoing(true)
+            .addAction(0, "Screenshot & crop", crop)
             .addAction(0, "Show Claude's answer", showAnswer)
             .addAction(0, "Close Buddy", stop)
             .build()
@@ -745,12 +802,16 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         runCatching { if (::speaker.isInitialized) speaker.shutdown() }
         runCatching { bubble?.remove() }
         runCatching { drawing?.remove() }
+        runCatching { cropView?.remove() }
         runCatching { capturer?.release() }
         super.onDestroy()
     }
 
     companion object {
         const val ACTION_STOP = "dev.buddy.STOP"
+        const val ACTION_CROP = "dev.buddy.CROP"
+        private const val CROP_SHADE_MS = 700L
+        private const val CROP_KEEP_MS = 5 * 60_000L
         const val ACTION_ANSWER_TEXT = "dev.buddy.ANSWER_TEXT"
         const val EXTRA_TEXT = "text"
         private const val EXTRA_RESULT_CODE = "result_code"

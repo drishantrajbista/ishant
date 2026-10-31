@@ -22,6 +22,8 @@ Screenshots are not captured at any other time. The app does not keep a history 
 
 **API keys and settings.** Your Anthropic and Gemini API keys and your settings are stored on your device using Android's encrypted storage (EncryptedSharedPreferences). A key is sent only to the provider it belongs to, over HTTPS, to authenticate your requests. Backups are disabled for the app.
 
+**Transcript (on by default, can be switched off).** Buddy saves the last 300 things you said and its replies in a private file on your device so you can read, copy or delete them; you can clear them all or turn "Keep transcript" off. The last few exchanges are also sent to Anthropic as context in your next request (Claude API mode), and a cropped screenshot you choose replaces the full screenshot for one question. Nothing is sent to the developer.
+
 **Memory (on by default, can be switched off).** To adapt to how you talk, Buddy can save up to 30 short notes about your preferences and up to 50 shortcuts from phrases you use to app names. They are stored only on your device, in the same encrypted storage; you can view and delete each one, clear them all, or turn "Learn from me" off in the app. Buddy refuses to save notes that look like passwords, codes or card numbers. In Claude API mode the notes are included as context in your own requests to Anthropic. They are never sent to the developer.
 
 **Clipboard.** In Claude app mode the app places your question on the clipboard so you can paste it if needed, and reads the clipboard only when you tap the bubble to show Claude's answer.

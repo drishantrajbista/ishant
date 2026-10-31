@@ -151,6 +151,23 @@ with **Clear all** and a **Learn from me** switch (on by default; off means Budd
 
 Everything is stored in the app's encrypted preferences and never sent anywhere else.
 
+### Follow-up context, transcript and cropped screenshots
+
+- **Follow-up context.** Buddy keeps the last 10 exchanges (what you said and its spoken reply, each clipped to 300
+  characters) as text. A new Claude API conversation still starts fresh, with no old screenshots, but its first message
+  carries a "recent conversation" block (at most 1500 characters, oldest dropped first), so "do that again" or "what about
+  the second one" work. The 90 s live-conversation window is unchanged. Claude app mode adds the last 3 exchanges as one
+  line in the hand-off text.
+- **Transcript.** Every exchange (time, your words, Buddy's reply, the mode: claude api, claude app or local) is saved in a
+  private file on the phone, the last 300, never synced. Home > Transcript shows them newest first by day, with search,
+  select and Copy, Delete per entry and Clear all. **Keep transcript** (default on) turns saving off; the last 10 exchanges
+  are then kept in memory only. Copy report includes only the count.
+- **Screenshot & crop.** The notification action **Screenshot & crop** captures the screen (Buddy's windows hidden) and
+  opens a full-screen crop view: drag the corners or the inside of the rectangle, then **Use** or **Cancel**. The crop
+  waits up to 5 minutes for your next question. In Claude API mode the next hold sends it (long edge at most 1280 px)
+  instead of the screenshot, labelled as a cropped region, so Claude is told not to tap from it. In Claude app mode the
+  crop is shared to the Claude app instead of the full screenshot.
+
 ### Phone context and default apps
 
 The first message of each conversation carries a short note (under ~400 characters): the phone model, Android version,
