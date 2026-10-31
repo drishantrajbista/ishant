@@ -174,3 +174,16 @@ class SentenceSplitTest {
         assertEquals(0, sentenceEnd("it costs 3.5 dollars", 0))
     }
 }
+
+class BlankFrameTest {
+    @Test fun allBlackIsBlank() = assertTrue(isBlankFrame(IntArray(100) { 0xFF000000.toInt() }))
+    @Test fun nearBlackIsStillBlank() = assertTrue(isBlankFrame(IntArray(100) { 0xFF050505.toInt() }))
+    @Test fun anyRealContentIsNot() {
+        val px = IntArray(100) { 0xFF000000.toInt() }
+        px[42] = 0xFF303030.toInt()
+        assertFalse(isBlankFrame(px))
+        assertFalse(isBlankFrame(IntArray(100) { 0xFFFFFFFF.toInt() }))
+        assertFalse(isBlankFrame(IntArray(100) { 0xFF0000FF.toInt() }))   // pure blue: luminance ~29
+    }
+    @Test fun noSamplesIsNotBlank() = assertFalse(isBlankFrame(IntArray(0)))
+}

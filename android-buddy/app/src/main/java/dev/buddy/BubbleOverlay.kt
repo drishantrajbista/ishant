@@ -64,6 +64,8 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         visibility = View.GONE
     }
     private val textParams = overlayParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, false)
+    // Android 12+ blocks touches passing through another app's overlay window above 0.8 alpha; 0.8 is the maximum.
+    init { textParams.alpha = 0.8f }
     private var added = false
     private var hiddenForCapture = false
 

@@ -103,6 +103,11 @@ class ScreenCapturer(context: Context, private val projection: MediaProjection, 
             if (bitmap == null) delay(50)
         }
         val scaled = bitmap ?: error("No screen frame available yet")
+        // Android 14+ can share a single app; everything else is then captured as black.
+        val sample = IntArray(100) { scaled.getPixel((it % 10 * 2 + 1) * scaled.width / 20, (it / 10 * 2 + 1) * scaled.height / 20) }
+        if (isBlankFrame(sample)) {
+            throw SpokenException("screen capture is blank. stop buddy, start it again, and choose share entire screen.")
+        }
         val out = ByteArrayOutputStream()
         scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
         Screenshot(out.toByteArray(), scaled.width, scaled.height, w, h)
@@ -127,4 +132,9 @@ class ScreenCapturer(context: Context, private val projection: MediaProjection, 
         thread.quitSafely()
         projection.stop()
     }
+}
+
+/** True if every sampled pixel is essentially black (luminance < 8): a capture that only shares a single app. */
+fun isBlankFrame(pixels: IntArray): Boolean = pixels.isNotEmpty() && pixels.all {
+    0.299 * (it shr 16 and 0xFF) + 0.587 * (it shr 8 and 0xFF) + 0.114 * (it and 0xFF) < 8
 }

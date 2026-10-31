@@ -264,6 +264,7 @@ private fun SetupScreen(settings: Settings) {
         } else {
             Button(onClick = ::start, modifier = Modifier.fillMaxWidth()) { Text("Start Buddy") }
         }
+        Text("When Android asks, choose 'Entire screen' (not a single app).", style = MaterialTheme.typography.bodySmall)
         Text(
             "Screenshots are only captured when you release the bubble. Claude app mode hands the screenshot to the " +
                 "Claude app on this phone (Buddy sends nothing itself). Claude API mode sends it to Anthropic. " +

@@ -39,6 +39,10 @@ class DrawingOverlay(private val context: Context) {
     ).apply {
         flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
         layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        // Android 12+ blocks touches that pass through another app's overlay window whose alpha is above 0.8, and
+        // this window covers the whole screen. 0.8 is the most opaque it may be and still let touches through; the
+        // view is also GONE whenever there is nothing to draw, so it normally isn't there at all.
+        alpha = 0.8f
     }
     private var added = false
     private var finished = true
@@ -49,6 +53,7 @@ class DrawingOverlay(private val context: Context) {
 
     fun show() {
         if (added) return
+        view.visibility = View.GONE
         wm.addView(view, params)
         added = true
     }
@@ -138,9 +143,12 @@ class DrawingOverlay(private val context: Context) {
 
         val hasContent get() = items.isNotEmpty() || cursor != null
 
-        fun setSuppressed(b: Boolean) { suppressed = b; invalidate() }
+        private fun updateVisibility() { visibility = if (suppressed || !hasContent) GONE else VISIBLE }
+
+        fun setSuppressed(b: Boolean) { suppressed = b; updateVisibility(); invalidate() }
 
         fun play(shapes: List<Shape>, from: PointF, done: () -> Unit) {
+            visibility = if (suppressed) GONE else VISIBLE
             val loc = IntArray(2).also { getLocationOnScreen(it) }
             fun v(p: Pt) = PointF(p.x - loc[0], p.y - loc[1])
             cancelled = false
@@ -194,6 +202,7 @@ class DrawingOverlay(private val context: Context) {
             items.clear()
             cursor = null
             onDone = null
+            visibility = GONE
             invalidate()
         }
 

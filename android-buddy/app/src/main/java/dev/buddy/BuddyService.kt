@@ -68,12 +68,13 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     )
     private var handoff: Handoff? = null    // non-null while an answer from the Claude app is awaited
     private var waitJob: Job? = null
+    private var stopping = false   // the user pressed Stop, so a projection that ends is not news
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
+            ACTION_STOP -> { stopping = true; stopSelf(); return START_NOT_STICKY }
             ACTION_ANSWER_TEXT -> {
                 if (capturer != null) onAnswerText(intent.getStringExtra(EXTRA_TEXT).orEmpty())
                 return START_NOT_STICKY
@@ -94,7 +95,10 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         settings = Settings(this)
         val projection = (getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager)
             .getMediaProjection(code, data)
-        capturer = ScreenCapturer(this, projection) { stopSelf() }
+        capturer = ScreenCapturer(this, projection) {
+            if (!stopping) notifyProjectionEnded()
+            stopSelf()
+        }
         drawing = DrawingOverlay(this).also { it.show() }
         bubble = BubbleOverlay(this, this).also { it.show() }
         speaker = Speaker(this) { finishSpeaking() }
@@ -429,7 +433,24 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             .build()
     }
 
+    /** The screen share ended on its own (the user ended it, or the system did): say so, since Buddy can't see now. */
+    private fun notifyProjectionEnded() {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel(STOPPED_CHANNEL_ID, "Buddy stopped", NotificationManager.IMPORTANCE_DEFAULT))
+        nm.notify(
+            STOPPED_NOTIFICATION_ID,
+            NotificationCompat.Builder(this, STOPPED_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_buddy)
+                .setContentTitle("Buddy stopped: screen sharing ended")
+                .setContentText("Tap to start again")
+                .setContentIntent(PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
+                .setAutoCancel(true)
+                .build(),
+        )
+    }
+
     override fun onDestroy() {
+        stopping = true
         running.value = false
         scope.cancel()
         recording?.discard()
@@ -449,6 +470,8 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         private const val EXTRA_DATA = "projection_data"
         private const val CHANNEL_ID = "buddy"
         private const val NOTIFICATION_ID = 1
+        private const val STOPPED_CHANNEL_ID = "buddy_stopped"
+        private const val STOPPED_NOTIFICATION_ID = 2
         private const val WAIT_MS = 10 * 60_000L
         private const val CAPTURE_DELAY_MS = 150L
         private const val OVERLAY_VISIBLE_MS = 150L
