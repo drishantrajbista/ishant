@@ -117,6 +117,11 @@ class Settings(context: Context) : QuotaStore {
         get() = str("learn", "1") == "1"
         set(v) = put("learn", if (v) "1" else "0")
 
+    /** "Always think deeper": Claude API requests use medium effort even for simple commands. Off: Buddy picks per conversation. */
+    var thinkDeeper: Boolean
+        get() = str("think_deeper", "0") == "1"
+        set(v) = put("think_deeper", if (v) "1" else "0")
+
     /** "Keep transcript": every exchange is saved in a file on this phone (last 300), never synced. */
     var keepTranscript: Boolean
         get() = str("keep_transcript", "1") == "1"

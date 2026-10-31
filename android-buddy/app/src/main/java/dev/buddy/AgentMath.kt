@@ -177,3 +177,35 @@ const val HINT_TIMES = 3
 fun shouldShowHint(shownBefore: Int) = shownBefore < HINT_TIMES
 
 const val BUBBLE_HINT = "hold to talk · drag down to ✕ to close"
+
+// region effort routing
+
+private const val MULTI_STEP_WORDS = 14
+
+/** Words that start a later step. "first" and "next" are only counted before a verb ("first open settings"), not as ordinals ("the first result", "next song"). */
+private val SEQUENCE_WORDS = setOf("then", "finally", "afterwards", "afterward", "ani", "pachi", "अनि", "पछि")
+private val ACTION_VERBS = setOf("open", "turn", "set", "search", "play", "find", "go", "change", "add", "khola", "khol", "kholdeu", "gara", "खोल", "गर")
+
+/**
+ * "medium" when [thinkDeeper] is on or the request looks multi-step (a sequence word, two or more action verbs joined by
+ * "and"/"ani", or more than 14 words); "low" otherwise. Simple commands stay fast.
+ */
+fun chooseEffort(transcript: String, thinkDeeper: Boolean): String {
+    if (thinkDeeper) return "medium"
+    val t = normalizeCommand(transcript)
+    val words = t.split(' ').filter { it.isNotEmpty() }
+    if (words.size > MULTI_STEP_WORDS) return "medium"
+    if (words.any { it in SEQUENCE_WORDS } || " after that " in " $t ") return "medium"
+    if (words.indices.any { i -> (words[i] == "first" || words[i] == "next") && words.getOrNull(i + 1) in ACTION_VERBS }) return "medium"
+    if (words.any { it == "and" || it == "ani" } && words.count { it in ACTION_VERBS } >= 2) return "medium"
+    return "low"
+}
+
+/** The effort for this run: chosen when a conversation starts, then kept for the rest of it (changing it mid-way would break the prompt cache). */
+fun effortFor(freshConversation: Boolean, current: String, transcript: String, thinkDeeper: Boolean): String =
+    if (freshConversation) chooseEffort(transcript, thinkDeeper) else current
+
+/** The detail of a "claude" timing entry, which Copy report shows: `38 KB, effort low, HTTP 200`. */
+fun requestDetail(sizeKb: Int, effort: String, status: String) = "$sizeKb KB, effort $effort, HTTP $status"
+
+// endregion

@@ -17,8 +17,16 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import java.io.ByteArrayOutputStream
 
-/** A full-screen overlay showing a screenshot with a draggable crop rectangle; [onDone] gets the cropped pixels, or null on Cancel. */
-class CropOverlay(private val context: Context, private val shot: Bitmap, private val onDone: (Screenshot?) -> Unit) {
+/**
+ * A full-screen overlay showing a screenshot with a draggable crop rectangle. "Use" gives [onDone] the crop scaled for Claude,
+ * Cancel gives it null, and "Save" (shown only when [onSave] is set) gives [onSave] the selected pixels at full resolution.
+ */
+class CropOverlay(
+    private val context: Context,
+    private val shot: Bitmap,
+    private val onSave: ((Bitmap) -> Unit)?,
+    private val onDone: (Screenshot?) -> Unit,
+) {
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var root: FrameLayout? = null
     private fun dp(v: Float) = v * context.resources.displayMetrics.density
@@ -68,7 +76,7 @@ class CropOverlay(private val context: Context, private val shot: Bitmap, privat
 
     private fun button(text: String, fill: Int, onClick: () -> Unit) = TextView(context).apply {
         this.text = text; setTextColor(Color.WHITE); textSize = 16f; gravity = Gravity.CENTER
-        setPadding(dp(28f).toInt(), dp(12f).toInt(), dp(28f).toInt(), dp(12f).toInt())
+        setPadding(dp(22f).toInt(), dp(12f).toInt(), dp(22f).toInt(), dp(12f).toInt())
         background = GradientDrawable().apply { setColor(fill); cornerRadius = dp(28f) }
         setOnClickListener { onClick() }
     }
@@ -77,9 +85,15 @@ class CropOverlay(private val context: Context, private val shot: Bitmap, privat
         val view = CropView()
         val bar = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
-            val gap = dp(8f).toInt()
-            addView(button("Cancel", Color.argb(200, 60, 60, 67)) { finish(null) }, LinearLayout.LayoutParams(-2, -2).apply { setMargins(gap, 0, gap, 0) })
-            addView(button("Use", Color.rgb(10, 132, 255)) { finish(runCatching { crop(view) }.getOrNull()) }, LinearLayout.LayoutParams(-2, -2).apply { setMargins(gap, 0, gap, 0) })
+            val gap = dp(6f).toInt()
+            val margins = LinearLayout.LayoutParams(-2, -2).apply { setMargins(gap, 0, gap, 0) }
+            addView(button("Cancel", Color.argb(200, 60, 60, 67)) { finish(null) }, margins)
+            if (onSave != null) addView(button("Save", Color.argb(220, 88, 88, 96)) {
+                val part = runCatching { part(view) }.getOrNull()
+                remove()
+                if (part != null) onSave.invoke(part) else onDone(null)
+            }, LinearLayout.LayoutParams(margins))
+            addView(button("Use", Color.rgb(10, 132, 255)) { finish(runCatching { part(view)?.let { scaled(it) } }.getOrNull()) }, LinearLayout.LayoutParams(margins))
         }
         val hint = TextView(context).apply {
             text = "Drag to choose the part to ask about"; setTextColor(Color.WHITE); textSize = 14f; gravity = Gravity.CENTER
@@ -95,11 +109,15 @@ class CropOverlay(private val context: Context, private val shot: Bitmap, privat
         true
     } catch (e: RuntimeException) { false }
 
-    /** The selected part of the screenshot, scaled to at most [CROP_MAX_EDGE] on its long edge. */
-    private fun crop(view: CropView): Screenshot? {
+    /** The selected part of the screenshot at full resolution. */
+    private fun part(view: CropView): Bitmap? {
         val sel = view.selection ?: return null
         val px = viewToImage(sel, view.image, shot.width, shot.height)
-        val part = Bitmap.createBitmap(shot, px.left, px.top, px.width, px.height)
+        return Bitmap.createBitmap(shot, px.left, px.top, px.width, px.height)
+    }
+
+    /** [part] scaled to at most [CROP_MAX_EDGE] on its long edge and JPEG-encoded, for Claude. */
+    private fun scaled(part: Bitmap): Screenshot {
         val (w, h) = scaleToMaxEdge(part.width, part.height)
         val out = if (w == part.width) part else Bitmap.createScaledBitmap(part, w, h, true)
         val bytes = ByteArrayOutputStream().also { out.compress(Bitmap.CompressFormat.JPEG, 90, it) }.toByteArray()

@@ -118,6 +118,20 @@ message list (every response's content, thinking blocks included, is echoed back
 until it is 10 minutes idle or 40 messages long. Haiku 5.5 gets 25 turns per request, Sonnet/Opus 40. **Tap the bubble
 at any time to stop everything immediately.**
 
+**Thinking:** the prompt has a short "how to think" protocol (silent, never spoken): simple commands are just done; for an
+ambiguous, multi-step or risky request Claude first works out what you want and what "done" looks like, separates what it
+sees (screen, memory notes, recent conversation) from what it assumes, weighs at least two readings, and picks the best;
+after acting it checks the new element list (or a screenshot) before saying it's done, and mentions a key assumption only
+when it matters. For everyday tasks (apps, settings, search, media, screenshots) an ambiguous request is not a reason to
+ask. The Claude app hand-off text carries the same nudge ("think it through carefully ... then answer").
+
+**Effort:** each Claude API conversation picks its reasoning effort once, from the first thing you say: `medium` when the
+request looks multi-step (a sequence word such as then / after that / finally / ani / pachi, or "first"/"next" before a
+verb, two or more action verbs joined by and/ani, or more than 14 words), `low` otherwise, and keeps it for the rest of
+that conversation (changing it mid-way would break the prompt cache). *Always think deeper* in the Brain section (off by
+default) makes every conversation `medium`. Local instant commands make no Claude call, so they are unaffected. Copy report
+shows the effort in each `claude` timing line.
+
 **Safety:** Buddy only acts when you ask. Typing into password fields is blocked in code. Claude is told to ask you out
 loud before sending, posting, paying, deleting or changing passwords, security settings or permissions (your next
 voice turn is the answer), never to enter passwords, card numbers or one-time codes, and to treat text on the screen as
@@ -279,13 +293,32 @@ under *Capabilities* in setup:
 Calendar entries, notifications and on-screen text are treated as data, never as instructions. The same safety rules
 as before apply (confirmation before sending, paying, posting or deleting; never typing into password fields). The simple
 ones (alarm, timer, media, flashlight, volume) also run as instant local commands, e.g. "set a timer for 5 minutes",
-"set an alarm for 7 am", "pause", "next song".
+"set an alarm for 7 am", "pause", "next song", "take a screenshot".
 
 ### Briefing
 
 Say "what's my day", "good morning", "what did I miss" or "briefing": Buddy speaks one short paragraph built locally with
 no Claude call: the time, your next 1 to 3 events, the number of notifications and the latest one, and the battery if it
 is low. A source you haven't allowed is skipped silently.
+
+### Screenshot to gallery
+
+Say "take a screenshot", "screenshot" or "save a screenshot" (Nepali: "screenshot khich", "screenshot le"): a local command,
+no Claude call, in either mode. Buddy hides its bubble and drawings, waits about 300 ms, and asks the system to take its own
+screenshot through the accessibility service (Android 9+), so it lands in the gallery like any other, with the system's
+toast. About 1.2 s later the bubble comes back and says "saved to gallery". If accessibility is off, or the system refuses,
+Android 10+ falls back to grabbing a frame itself and saving a PNG in `Pictures/Buddy` through MediaStore (no storage
+permission needed; blank or protected screens are refused). Below Android 10 with accessibility off, Buddy says "turn on
+accessibility to save screenshots". Claude API mode has the same thing as a `save_screenshot` tool. The crop view from
+*Screenshot & crop* also has a **Save** button (Android 10+) that saves the selected part, at full resolution, to
+`Pictures/Buddy`.
+
+### Everyday requests that are ambiguous
+
+For everyday tasks (opening apps, changing settings, searching, media, screenshots) the prompt tells Claude to use the
+current screen, the memory notes and the recent conversation to pick the most likely meaning and do it (see *Thinking*
+above), and, when you correct it, to call `remember` with a short note so the same correction isn't needed twice. The
+confirmation rules (sending, posting, paying, deleting, security settings, permissions) are unchanged.
 
 ### Conversation mode
 
@@ -297,7 +330,7 @@ open after a plain action confirmation ("done"), only after a spoken answer (or 
 ## Speed
 
 - **Local commands** need no AI and run instantly in either mode: "open <app>" (only on a confident match), "go home", "go
-  back", "recent apps", "open notifications", "quick settings", "flashlight on/off", "volume up/down/mute/max" and "open
+  back", "recent apps", "open notifications", "quick settings", "take a screenshot", "flashlight on/off", "volume up/down/mute/max" and "open
   wifi/bluetooth/display/battery/sound/location settings". Anything else goes to Claude. (Home/back/recents/notifications
   need the accessibility service; without it Claude explains.)
 - Each hold starts a fresh conversation (a follow-up within 90 s keeps it), so old screenshots are not re-sent. Agent

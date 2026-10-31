@@ -28,4 +28,4 @@ Notes for the free-text fields:
 - No analytics or advertising SDKs are included.
 
 ## Stored on the device only (not "collected")
-API keys (EncryptedSharedPreferences), settings, and the short notes and app-phrase shortcuts Buddy learns when "Learn from me" is on (Transcript: the last 300 exchanges, optional, in a private file; Memory: the user can see, delete or switch it off; notes are sent to Anthropic only as context in the user's own Claude API requests). The last screenshot handed to the Claude app is kept in the app's private cache until overwritten.
+API keys (EncryptedSharedPreferences), settings, and the short notes and app-phrase shortcuts Buddy learns when "Learn from me" is on (Screenshots the user asks Buddy to save go to the device gallery, Pictures/Buddy, and nowhere else; Transcript: the last 300 exchanges, optional, in a private file; Memory: the user can see, delete or switch it off; notes are sent to Anthropic only as context in the user's own Claude API requests). The last screenshot handed to the Claude app is kept in the app's private cache until overwritten.

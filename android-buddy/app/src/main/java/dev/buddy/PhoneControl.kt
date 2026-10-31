@@ -21,6 +21,8 @@ interface Stage {
     fun bubbleTouchable(on: Boolean)
     /** The accessibility service is off or disconnected: tell the user (bubble and a notification). */
     fun needAccessibility(message: String)
+    /** Saves the screen to the gallery (Buddy's windows hidden meanwhile). Returns what to tell the user; throws [ToolError] if it can't. */
+    suspend fun saveScreenshot(): String
 }
 
 private val SCREEN_CHANGING = setOf(
@@ -118,6 +120,7 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
                 val note = cleanNote(use.input.optString("note")) ?: throw ToolError("that can't be saved: it must be a short note (at most $MAX_NOTE_CHARS characters) and not sensitive")
                 settings.notes = addNote(settings.notes, note)
             }
+            "save_screenshot" -> { stage.status("saving a screenshot"); shotResult = listOf(AgentJson.text(stage.saveScreenshot())) }
             "default_apps" -> shotResult = listOf(AgentJson.text(formatDefaultApps(context.defaultApps())))
             "device_status" -> shotResult = listOf(AgentJson.text(context.deviceStatus()))
             "web_search" -> { stage.status("searching"); context.webSearch(use.input.optString("query")); a11y?.acted() }

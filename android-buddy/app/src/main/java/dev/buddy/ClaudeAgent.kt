@@ -28,6 +28,7 @@ interface Phone {
 class ClaudeAgent(private val settings: Settings, private val phoneContext: () -> String = { "" }) {
     private var messages = JSONArray()
     private var lastAt = 0L
+    private var effort = "low"   // chosen when a conversation starts and kept for all of its requests
 
     /** True if the last request ran anything but looking tools: an action, not just an answer. */
     var acted = false
@@ -39,6 +40,7 @@ class ClaudeAgent(private val settings: Settings, private val phoneContext: () -
         if (!keepContext(lastAt, now, messages.length())) messages = JSONArray()
         lastAt = now
         acted = false
+        effort = effortFor(messages.length() == 0, effort, transcript, settings.thinkDeeper)
 
         val content = JSONArray()
         // The first message of a conversation says what phone this is, what's in front and which default apps to use.
@@ -88,7 +90,7 @@ class ClaudeAgent(private val settings: Settings, private val phoneContext: () -
 
     private suspend fun post(): JSONObject {
         val model = settings.claudeModel
-        val text = AgentJson.request(model, AGENT_PROMPT, messages).toString()
+        val text = AgentJson.request(model, AGENT_PROMPT, messages, effort).toString()
         val request = messagesRequest(settings.claudeKey, model, text)
         val t0 = System.nanoTime()
         var status = "200"
@@ -102,7 +104,7 @@ class ClaudeAgent(private val settings: Settings, private val phoneContext: () -
             status = e.javaClass.simpleName
             throw e
         } finally {
-            TimingLog.record("claude", (System.nanoTime() - t0) / 1_000_000, "${text.length / 1024} KB, HTTP $status")
+            TimingLog.record("claude", (System.nanoTime() - t0) / 1_000_000, requestDetail(text.length / 1024, effort, status))
         }
     }
 

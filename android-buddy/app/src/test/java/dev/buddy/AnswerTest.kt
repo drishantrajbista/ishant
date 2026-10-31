@@ -138,7 +138,8 @@ class ScalingTest {
 class HandoffTest {
     @Test fun prefilledTextIsExact() {
         assertEquals(
-            "how do i turn on dark mode\n\n[buddy: my screenshot is 655x1456 px. answer to the point in one short sentence in english (more only if i ask), " +
+            "how do i turn on dark mode\n\n[buddy: my screenshot is 655x1456 px. think it through carefully (what i really want, what you see vs what you assume), " +
+                "then answer to the point in one short sentence in english (more only if i ask), " +
                 "no markdown. to show me on screen add tags in screenshot pixels: [POINT:x,y:label] [CIRCLE:x,y,r] " +
                 "[BOX:x1,y1,x2,y2] [ARROW:x1,y1,x2,y2] [LINE:x1,y1,x2,y2] [PATH:x1,y1,x2,y2,...] [TEXT:x,y:words]]",
             handoffText("how do i turn on dark mode", 655, 1456, draw = true),

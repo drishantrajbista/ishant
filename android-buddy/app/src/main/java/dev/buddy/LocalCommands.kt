@@ -19,6 +19,8 @@ sealed class LocalCommand {
     data class Timer(val seconds: Int) : LocalCommand()
     data class Media(val action: String) : LocalCommand()
     object Briefing : LocalCommand()
+    /** "take a screenshot": saved to the gallery. */
+    object SaveScreenshot : LocalCommand()
 }
 
 /** "7:30 am" for an alarm's hour and minute (24-hour in). */
@@ -63,6 +65,9 @@ private val MEDIA_PHRASES = mapOf(
     "next song" to "next", "next track" to "next", "skip" to "next", "skip song" to "next", "skip this song" to "next", "skip track" to "next",
     "previous song" to "previous", "previous track" to "previous", "last song" to "previous", "go to the previous song" to "previous",
 )
+
+// "take a screenshot", "screenshot", "save a screenshot"; Nepali "screenshot khich" / "screenshot le"
+private val SCREENSHOT = Regex("^(?:(?:take|save|capture|grab) (?:a |the |my )?)?screen ?shot(?: (?:khich|khichdeu|khichnu|le|linu|gara|garnu|deu|dinu))?$")
 
 private val FILLER_START = Regex("^((hey )?buddy )?((can|could|would|will) you )?(please )?(kindly )?")
 private val FILLER_END = Regex(" (please|for me|now)$")
@@ -135,6 +140,7 @@ fun routeLocal(transcript: String, labels: () -> List<String>): LocalCommand? {
     if (t == "louder") return LocalCommand.Volume("up")
     if (t == "quieter") return LocalCommand.Volume("down")
 
+    if (SCREENSHOT.matches(t)) return LocalCommand.SaveScreenshot
     if (Regex("^(whats|what s|what is) my day$|^good morning$|^what did i miss$|^(my |daily )?briefing$|^give me (my |a |the )?(daily )?briefing$|^brief me$").matches(t)) {
         return LocalCommand.Briefing
     }

@@ -178,6 +178,9 @@ class BuddyAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** The system's own screenshot, saved to the gallery as usual (Android 9+). False if the system refused. */
+    fun systemScreenshot(): Boolean = Build.VERSION.SDK_INT >= 28 && performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT)
+
     fun nav(action: String): Boolean {
         val code = when (action) {
             "back" -> GLOBAL_ACTION_BACK

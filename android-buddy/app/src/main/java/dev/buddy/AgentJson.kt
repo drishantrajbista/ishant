@@ -71,6 +71,7 @@ object AgentJson {
             .put(custom("default_apps", "The user's default apps (browser, dialer, messages, email, camera, maps, music, gallery, launcher).", JSONObject(), emptyList()))
             .put(custom("remember", "Save one short note about a stable preference or phrasing habit of the user (never passwords, codes, card numbers or other sensitive data; never one-off facts).",
                 JSONObject().put("note", prop("string", "a short note, at most 120 characters")), listOf("note")))
+            .put(custom("save_screenshot", "Save a screenshot of the current screen to the phone's gallery.", JSONObject(), emptyList()))
             .put(custom("web_search", "Search the web in the browser.", JSONObject().put("query", prop("string", "what to search for")), listOf("query")))
             .put(custom(
                 "android_nav", "Android system navigation.",
@@ -93,11 +94,11 @@ object AgentJson {
     }
 
     /** Non-streaming request. [messages] is passed as is: it is append-only. */
-    fun request(model: String, system: String, messages: JSONArray): JSONObject {
+    fun request(model: String, system: String, messages: JSONArray, effort: String = "low"): JSONObject {
         val body = JSONObject()
             .put("model", model)
             .put("max_tokens", 4096)
-            .put("output_config", JSONObject().put("effort", "low"))
+            .put("output_config", JSONObject().put("effort", effort))
             .put("cache_control", JSONObject().put("type", "ephemeral"))   // automatic prompt caching
             .put("system", system)
             .put("tools", tools())

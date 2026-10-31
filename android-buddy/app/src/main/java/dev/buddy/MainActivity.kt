@@ -154,6 +154,7 @@ private class AppState(private val context: Context, val settings: Settings) {
     var conversation by mutableStateOf(settings.conversationMode)
     var learn by mutableStateOf(settings.learnFromMe)
     var keepTranscript by mutableStateOf(settings.keepTranscript)
+    var thinkDeeper by mutableStateOf(settings.thinkDeeper)
     var transcriptCount by mutableStateOf(0)
     var notes by mutableStateOf(settings.notes)
     var aliases by mutableStateOf(settings.aliases)
@@ -198,6 +199,7 @@ private class AppState(private val context: Context, val settings: Settings) {
     fun saveAccent(tag: String) { voiceAccent = tag; settings.voiceAccent = tag }
     fun setDraw(on: Boolean) { drawTags = on; settings.drawTags = on }
     fun saveConversation(on: Boolean) { conversation = on; settings.conversationMode = on }
+    fun saveThink(on: Boolean) { thinkDeeper = on; settings.thinkDeeper = on }
     fun saveKeep(on: Boolean) { keepTranscript = on; settings.keepTranscript = on }
     fun saveLearn(on: Boolean) { learn = on; settings.learnFromMe = on }
     fun deleteNote(note: String) { notes = notes - note; settings.notes = notes }
@@ -498,6 +500,10 @@ private fun Home(state: AppState, actions: Actions, running: Boolean, openTransc
                         Box(Modifier.padding(16.dp)) {
                             SegmentedControl(listOf("Haiku", "Sonnet", "Opus"), segmentIndex(CLAUDE_MODELS, state.claudeModel), { state.saveClaudeModel(CLAUDE_MODELS[it]) })
                         }
+                        Hairline()
+                        SettingRow("Always think deeper", "Buddy already thinks more on multi-step tasks; turn this on to think more on everything.", Icons.Default.Build, Tint.Purple) {
+                            MinimalSwitch(state.thinkDeeper) { state.saveThink(it) }
+                        }
                     }
                 }
             }
@@ -602,7 +608,7 @@ private fun Home(state: AppState, actions: Actions, running: Boolean, openTransc
                 Hairline()
                 PermissionRow("Calendar", "Lets Claude read your upcoming events, read-only, when you ask.", Icons.Default.Info, Tint.Blue, state.calendarOk, actions.grantCalendar)
             }
-            Footnote("Alarms, timers, media controls, flashlight and volume need no special permission. Say \"what's my day\" for a quick briefing.")
+            Footnote("Alarms, timers, media controls, flashlight and volume need no special permission. Say \"what's my day\" for a quick briefing, or \"take a screenshot\" to save one to your gallery.")
 
             // --- Memory ---
             SectionHeader("Memory")

@@ -12,7 +12,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.PointF
 import android.os.Build
 import android.media.projection.MediaProjectionManager
@@ -33,6 +32,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -408,15 +408,26 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         cancelWork()
         launchWork {
             delay(CROP_SHADE_MS)   // the notification shade is closing
-            val bytes = hiddenCapture { captureScreen(2000, 90) }.jpeg
-            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: throw SpokenException("couldn't capture the screen")
-            val overlay = CropOverlay(this@BuddyService, bitmap) { crop ->
+            val frame = hiddenCapture { fullFrame() }   // full resolution, so Save keeps every pixel
+            checkNotBlank(frame)
+            val onSave: ((Bitmap) -> Unit)? = if (!canSaveToGallery) null else { part ->
+                cropView = null
+                saveCrop(part)
+            }
+            val overlay = CropOverlay(this@BuddyService, frame, onSave) { crop ->
                 cropView = null
                 if (crop == null) showMessage("crop cancelled", 1500)
                 else { pendingCrop = crop; pendingCropAt = SystemClock.elapsedRealtime(); showMessage("cropped. hold me and ask about it", 6000) }
             }
             if (overlay.show()) cropView = overlay else throw SpokenException("couldn't show the crop view")
         }
+    }
+
+    /** The crop view's Save: the selected part of the screen goes to Pictures/Buddy at full resolution. */
+    private fun saveCrop(part: Bitmap) = launchWork {
+        val saved = withContext(Dispatchers.IO) { saveToGallery(part) }
+        bubble?.buzz()
+        showMessage(if (saved != null) SAVED_TO_GALLERY else "couldn't save the picture", 2000)
     }
 
     // endregion
@@ -456,8 +467,9 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             ?: (if (settings.learnFromMe) aliasCommand(transcript, settings.aliases) { apps.keys } else null)
             ?: return false
         if (command is LocalCommand.Briefing) { speakBriefing(t0, transcript); return true }
+        if (command is LocalCommand.SaveScreenshot) { saveScreenshotCommand(t0, transcript); return true }
         val done = when (command) {
-            is LocalCommand.Briefing -> null
+            is LocalCommand.Briefing, is LocalCommand.SaveScreenshot -> null
             is LocalCommand.Alarm -> try { setAlarm(command.hour, command.minute, null); "alarm set for ${clockText(command.hour, command.minute)}" } catch (e: ToolError) { null }
             is LocalCommand.Timer -> try { setTimer(command.seconds, null); "timer set for ${durationText(command.seconds)}" } catch (e: ToolError) { null }
             is LocalCommand.Media -> if (mediaKey(command.action)) "media ${command.action}" else null
@@ -510,12 +522,12 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         }
     }
 
-    /** Hides Buddy's own windows while [block] takes a screenshot. */
-    private suspend fun <T> hiddenCapture(block: suspend () -> T): T {
+    /** Hides Buddy's own windows while [block] takes a screenshot, after waiting [delayMs] for them to disappear. */
+    private suspend fun <T> hiddenCapture(delayMs: Long = CAPTURE_DELAY_MS, block: suspend () -> T): T {
         bubble?.setHiddenForCapture(true)
         drawing?.setSuppressed(true)
         try {
-            delay(CAPTURE_DELAY_MS)
+            delay(delayMs)
             return block()
         } finally {
             bubble?.setHiddenForCapture(false)
@@ -542,6 +554,46 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         override fun status(text: String) = agentStatus(text)
         override fun bubbleTouchable(on: Boolean) { bubble?.setTouchable(on) }
         override fun needAccessibility(message: String) = notifyAccessibilityNeeded(message)
+        override suspend fun saveScreenshot(): String = this@BuddyService.saveScreenshot()
+    }
+
+    /**
+     * Saves the screen to the gallery: the system's own screenshot when accessibility is on (it lands in the gallery as
+     * usual), else, on Android 10+, a PNG in Pictures/Buddy. Buddy's windows stay hidden while it happens. Throws a
+     * [ToolError] with a sentence that can be said out loud when it can't.
+     */
+    private suspend fun saveScreenshot(): String {
+        shotJob?.cancelAndJoin(); shotJob = null   // its own hiding and showing of the windows must not interleave with ours
+        val a11y = BuddyAccessibilityService.instance
+        if (a11y != null && Build.VERSION.SDK_INT >= 28) {
+            val taken = hiddenCapture(SCREENSHOT_HIDE_MS) { a11y.systemScreenshot().also { delay(SCREENSHOT_RESTORE_MS) } }
+            if (taken) return SAVED_TO_GALLERY
+        }
+        // No accessibility (or the system refused): grab a frame ourselves. Android 10+ needs no storage permission for this.
+        if (!canSaveToGallery) throw ToolError(if (a11y == null) "turn on accessibility to save screenshots" else "couldn't save the screenshot")
+        try {
+            val frame = stage.frame()
+            checkNotBlank(frame)
+            withContext(Dispatchers.IO) { saveToGallery(frame) } ?: throw ToolError("couldn't save the screenshot")
+        } catch (e: SpokenException) {
+            throw ToolError(e.message.orEmpty())
+        }
+        return SAVED_TO_GALLERY
+    }
+
+    /** "Take a screenshot": no Claude call; if it can't be done the reason is spoken. */
+    private suspend fun saveScreenshotCommand(t0: Long, transcript: String) {
+        val done = try {
+            saveScreenshot()
+        } catch (e: ToolError) {
+            record(transcript, e.message.orEmpty(), "local")
+            return say(e.message.orEmpty())
+        }
+        record(transcript, done, "local")
+        TimingLog.record("local", SystemClock.elapsedRealtime() - t0, "screenshot")
+        TimingLog.record("total", SystemClock.elapsedRealtime() - pressEndAt, "local")
+        bubble?.buzz()
+        showMessage(done, 2000)
     }
 
     // endregion
@@ -811,6 +863,9 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         const val ACTION_STOP = "dev.buddy.STOP"
         const val ACTION_CROP = "dev.buddy.CROP"
         private const val CROP_SHADE_MS = 700L
+        private const val SCREENSHOT_HIDE_MS = 300L       // windows gone before the system takes its screenshot
+        private const val SCREENSHOT_RESTORE_MS = 1200L   // ...and back this long after
+        private const val SAVED_TO_GALLERY = "saved to gallery"
         private const val CROP_KEEP_MS = 5 * 60_000L
         const val ACTION_ANSWER_TEXT = "dev.buddy.ANSWER_TEXT"
         const val EXTRA_TEXT = "text"
