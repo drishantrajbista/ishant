@@ -31,6 +31,31 @@
             </intent-filter>
         </activity>
 
+        <!-- Invisible: reads Claude's copied answer (needs window focus on Android 10+) and hands it to the service. -->
+        <activity
+            android:name=".ClipboardActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Buddy.Clipboard" />
+
+        <!-- "Show with Buddy": share Claude's answer to Buddy. -->
+        <activity
+            android:name=".ShareTargetActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:label="Show with Buddy"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Buddy.Clipboard">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <!-- Shares the screenshot with the Claude app via a content:// URI. -->
         <provider
             android:name="androidx.core.content.FileProvider"

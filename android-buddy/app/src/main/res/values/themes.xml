@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Buddy" parent="@android:style/Theme.Material.NoActionBar" />
+
+    <!-- Transparent and instant, for the activities that only exist to get focus or catch a share. -->
+    <style name="Theme.Buddy.Clipboard" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowNoDisplay">false</item>
+    </style>
 </resources>

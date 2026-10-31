@@ -4,8 +4,8 @@ import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-/** How questions get answered: hand-off to the Claude app, Gemini API, or Claude API. */
-enum class Provider { CLAUDE_APP, GEMINI, CLAUDE }
+/** How questions get answered: a hand-off to the Claude app (chat), or the Claude API. Gemini only does voice. */
+enum class Provider { CLAUDE_APP, CLAUDE }
 
 /** How speech becomes text: Gemini listens to a recording Buddy makes, or the phone's own recognizer. */
 enum class VoiceEngine { GEMINI, PHONE }
@@ -48,11 +48,7 @@ class Settings(context: Context) : QuotaStore {
     private fun put(key: String, value: String) = prefs.edit().putString(key, value.trim()).apply()
 
     var provider: Provider
-        get() = when (str("provider")) {
-            "GEMINI" -> Provider.GEMINI
-            "CLAUDE" -> Provider.CLAUDE
-            else -> Provider.CLAUDE_APP
-        }
+        get() = if (str("provider") == "CLAUDE") Provider.CLAUDE else Provider.CLAUDE_APP   // old "GEMINI" -> Claude app
         set(v) = put("provider", v.name)
 
     /** The engine the user picked, or null to follow the default. */
@@ -72,6 +68,11 @@ class Settings(context: Context) : QuotaStore {
 
     fun markGeminiVoiceOutToday() = put("voice_out_day", pacificDay())
 
+    /** Claude app mode: ask Claude to point and draw (adds the tag instructions to the question). */
+    var drawTags: Boolean
+        get() = str("draw_tags", "1") == "1"
+        set(v) = put("draw_tags", if (v) "1" else "0")
+
     var speechLanguage: String get() = str("speech_language"); set(v) = put("speech_language", v)
     var geminiKey: String get() = str("gemini_key"); set(v) = put("gemini_key", v)
     var geminiModel: String get() = str("gemini_model", DEFAULT_GEMINI_MODEL); set(v) = put("gemini_model", v)
@@ -81,18 +82,10 @@ class Settings(context: Context) : QuotaStore {
     var proxyUrl: String get() = str("proxy_url"); set(v) = put("proxy_url", v)
 
     val isConfigured: Boolean
-        get() = when (provider) {
-            Provider.CLAUDE_APP -> true
-            Provider.GEMINI -> geminiKey.isNotBlank()
-            Provider.CLAUDE -> claudeKey.isNotBlank() || proxyUrl.isNotBlank()
-        }
+        get() = provider == Provider.CLAUDE_APP || claudeKey.isNotBlank() || proxyUrl.isNotBlank()
 
     /** Gemini voice needs a Gemini key whatever the mode is. */
     val voiceReady: Boolean get() = voiceEngine == VoiceEngine.PHONE || geminiKey.isNotBlank()
-
-    /** The chat model for the API modes (not used by the Claude app hand-off). */
-    fun createProvider(notify: (String?) -> Unit = {}): AiProvider =
-        if (provider == Provider.CLAUDE) ClaudeClient(this) else GeminiClient(this, notify)
 
     // --- QuotaStore: Gemini free-tier bookkeeping, keyed by Pacific date ("day|value") ---
 

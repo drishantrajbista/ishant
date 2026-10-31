@@ -19,8 +19,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
-import kotlin.math.max
-import kotlin.math.min
 
 class Screenshot(
     val jpeg: ByteArray,
@@ -91,12 +89,12 @@ class ScreenCapturer(context: Context, private val projection: MediaProjection, 
         old.close()
     }
 
-    /** Grabs the newest frame, downscales so the long edge is <= [maxEdge] and JPEG-encodes it. */
-    suspend fun capture(maxEdge: Int = 1280, quality: Int = 80): Screenshot = withContext(Dispatchers.Default) {
+    /** Grabs the newest frame, downscales it to fit [maxEdge] / [maxPixels] and JPEG-encodes it. */
+    suspend fun capture(maxEdge: Int = 1280, quality: Int = 80, maxPixels: Int = Int.MAX_VALUE): Screenshot = withContext(Dispatchers.Default) {
         resizeIfRotated()
         val w = width
         val h = height
-        val scale = min(1f, maxEdge.toFloat() / max(w, h))
+        val scale = scaleFor(w, h, maxEdge, maxPixels)
         var bitmap: Bitmap? = null
         var tries = 0
         while (bitmap == null && tries++ < 40) {

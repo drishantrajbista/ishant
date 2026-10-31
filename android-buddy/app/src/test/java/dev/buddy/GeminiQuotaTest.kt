@@ -217,13 +217,12 @@ class ModelFallbackTest {
         assertEquals(2, attempts.count { it.first == flash && it.second == ModelFallback.THINKING[0] })
     }
 
-    @Test fun everyModelExhaustedGivesTheSpokenDailyLimitMessage() {
+    @Test fun everyModelExhaustedThrowsTheVoiceOutMessage() {
         try {
             run { _, _ -> throw tooMany(Bodies.perDay) }
             fail("expected GeminiExhaustedException")
         } catch (e: GeminiExhaustedException) {
-            assertTrue(e.message!!.startsWith("gemini's free daily limit is used up. it resets at midnight pacific time."))
-            assertTrue(e.message!!.endsWith("switch voice to phone and use claude app mode."))
+            assertEquals("gemini voice is out for today, switched to phone voice. please ask again.", e.message)
         }
         assertEquals(1, listCalls)   // the key's other models were looked up once the known ones failed
         val tried = attempts.map { it.first }.distinct()

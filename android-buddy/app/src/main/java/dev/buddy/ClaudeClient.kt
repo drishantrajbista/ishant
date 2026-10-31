@@ -10,14 +10,13 @@ import org.json.JSONObject
 import java.io.IOException
 
 /** Anthropic Messages API with SSE streaming, directly or through a Clicky-style proxy. */
-class ClaudeClient(private val settings: Settings) : AiProvider {
-    override fun stream(
+class ClaudeClient(private val settings: Settings) {
+    fun stream(
         systemPrompt: String,
         history: List<Pair<String, String>>,
         screenshot: Screenshot,
-        question: Question,
+        transcript: String,
     ): Flow<String> {
-        val transcript = requireNotNull(question.transcript) { "Claude takes text questions only" }
         val messages = JSONArray()
         history.forEach { (user, assistant) ->
             messages.put(JSONObject().put("role", "user").put("content", user))
@@ -31,7 +30,7 @@ class ClaudeClient(private val settings: Settings) : AiProvider {
             JSONObject().put("role", "user").put(
                 "content",
                 JSONArray().put(image)
-                    .put(JSONObject().put("type", "text").put("text", screenLabel(screenshot)))
+                    .put(JSONObject().put("type", "text").put("text", "screen 1 (image dimensions: ${screenshot.width}x${screenshot.height} pixels)"))
                     .put(JSONObject().put("type", "text").put("text", transcript)),
             ),
         )

@@ -1,8 +1,6 @@
 package dev.buddy
 
 import android.util.Base64
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -10,50 +8,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Google Gemini (free tier from AI Studio): streaming chat with a screenshot, plus audio transcription. Requests go
+ * Google Gemini (free tier from AI Studio), used only to turn a voice recording into text. Requests go
  * through [ModelFallback], which copes with thinking configs and free-tier limits; [notify] receives the short
  * status lines it wants shown ("busy, retrying in 13s", "switched to ...") and null to clear them.
  */
 class GeminiClient(
     private val settings: Settings,
     private val notify: (String?) -> Unit = {},
-) : AiProvider {
+) {
     private fun fallback() = ModelFallback(settings, { cachedModels() }, notify)
-
-    override fun stream(
-        systemPrompt: String,
-        history: List<Pair<String, String>>,
-        screenshot: Screenshot,
-        question: Question,
-    ): Flow<String> {
-        val contents = JSONArray()
-        history.forEach { (user, assistant) ->
-            contents.put(content("user", text(user)))
-            contents.put(content("model", text(assistant)))
-        }
-        val ask = question.audio?.let { inlineData("audio/aac", it) } ?: text(question.transcript.orEmpty())
-        contents.put(content("user", inlineData("image/jpeg", screenshot.jpeg), text(screenLabel(screenshot)), ask))
-        val preferred = listOf(settings.geminiModel.removePrefix("models/"), LITE_LATEST)
-
-        return flow {
-            var emitted = false
-            var finish: String? = null
-            var blocked: String? = null
-            fallback().run(preferred, started = { emitted }) { model, thinking ->
-                val body = JSONObject()
-                    .put("systemInstruction", JSONObject().put("parts", JSONArray().put(text(systemPrompt))))
-                    .put("contents", contents)
-                    .put("generationConfig", config(2048, thinking))
-                sseData(request("streamGenerateContent", model, body, sse = true)).collect { data ->
-                    val chunk = parseChunk(JSONObject(data))
-                    chunk.finish?.let { finish = it }
-                    chunk.blocked?.let { blocked = it }
-                    if (chunk.text.isNotEmpty()) { emitted = true; emit(chunk.text) }
-                }
-            }
-            if (!emitted) throw EmptyReplyException(blocked ?: finish)
-        }
-    }
 
     /**
      * One non-streaming call that turns an AAC clip into text, whatever language(s) it is in. Transcription doesn't
@@ -63,7 +26,7 @@ class GeminiClient(
         val contents = JSONArray().put(content("user", text(TRANSCRIBE_PROMPT), inlineData("audio/aac", audio)))
         val json = fallback().run(listOf(LITE_LATEST)) { model, thinking ->
             val body = JSONObject().put("contents", contents).put("generationConfig", config(512, thinking))
-            httpJson(request("generateContent", model, body))
+            httpJson(request(model, body))
         }
         val chunk = parseChunk(json)
         if (chunk.text.isBlank()) throw EmptyReplyException(chunk.blocked ?: chunk.finish)
@@ -72,8 +35,8 @@ class GeminiClient(
 
     private suspend fun cachedModels(): List<String> = listed ?: listModels(settings.geminiKey).also { listed = it }
 
-    private fun request(method: String, model: String, body: JSONObject, sse: Boolean = false) = Request.Builder()
-        .url("$BASE/models/$model:$method" + if (sse) "?alt=sse" else "")
+    private fun request(model: String, body: JSONObject) = Request.Builder()
+        .url("$BASE/models/$model:generateContent")
         .header("x-goog-api-key", settings.geminiKey)
         .post(body.toString().toRequestBody("application/json".toMediaType()))
         .build()

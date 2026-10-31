@@ -10,11 +10,8 @@ import kotlin.math.ceil
 /** The Flash-Lite alias: the model with the most free requests per day. */
 const val LITE_LATEST = "gemini-flash-lite-latest"
 
-/** Every model we could try has used up its free quota. */
-class GeminiExhaustedException : SpokenException(
-    "gemini's free daily limit is used up. it resets at midnight pacific time. " +
-        "for unlimited use, switch voice to phone and use claude app mode.",
-)
+/** Every model we could try has used up its free quota: voice falls back to the phone until the next Pacific midnight. */
+class GeminiExhaustedException : SpokenException("gemini voice is out for today, switched to phone voice. please ask again.")
 
 /** What a Google 429 body says about the quota that was hit. */
 class QuotaError(
@@ -111,7 +108,7 @@ interface QuotaStore {
 
 /**
  * Runs a Gemini request, coping with the free tier:
- *  - HTTP 400 (before any output) means the thinking config isn't supported: try the next variant. Never a reason to
+ *  - HTTP 400 means the thinking config isn't supported: try the next variant. Never a reason to
  *    change model; the variant that works is remembered per model.
  *  - HTTP 429 per-minute with a short retry delay: say so, wait, retry once.
  *  - HTTP 429 otherwise (per-day, limit 0, unknown), or 404: move on to the next model, remembering daily exhaustion
@@ -126,11 +123,7 @@ class ModelFallback(
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) {
     /** [first] is the preferred order (its head is the "requested" model); [attempt] gets (model, thinkingConfig JSON). */
-    suspend fun <T> run(
-        first: List<String>,
-        started: () -> Boolean = { false },
-        attempt: suspend (model: String, thinking: String?) -> T,
-    ): T {
+    suspend fun <T> run(first: List<String>, attempt: suspend (model: String, thinking: String?) -> T): T {
         val day = today()
         val requested = first.first()
         val exhausted = store.exhausted(day).toMutableSet()
@@ -155,9 +148,8 @@ class ModelFallback(
                 store.setNotified(day, model)
             }
             try {
-                return attemptModel(model, started, attempt)
+                return attemptModel(model, attempt)
             } catch (e: ApiException) {
-                if (started()) throw e
                 lastError = e
                 when (e.code) {
                     429 -> {
@@ -175,17 +167,13 @@ class ModelFallback(
     }
 
     /** One model: a per-minute 429 with a short retry delay is waited out once. */
-    private suspend fun <T> attemptModel(
-        model: String,
-        started: () -> Boolean,
-        attempt: suspend (String, String?) -> T,
-    ): T {
+    private suspend fun <T> attemptModel(model: String, attempt: suspend (String, String?) -> T): T {
         var retried = false
         while (true) {
             try {
-                return withThinking(model, started) { thinking -> attempt(model, thinking) }
+                return withThinking(model) { thinking -> attempt(model, thinking) }
             } catch (e: ApiException) {
-                if (e.code != 429 || started() || retried) throw e
+                if (e.code != 429 || retried) throw e
                 val quota = parseQuotaError(e.body)
                 val wait = quota.retryAfterSec
                 if (!quota.perMinute || quota.daily || wait == null || wait > MAX_WAIT_SEC) throw e
@@ -198,7 +186,7 @@ class ModelFallback(
     }
 
     /** Thinking tokens eat the output budget and slow replies, so try to switch thinking off; models disagree on how. */
-    private suspend fun <T> withThinking(model: String, started: () -> Boolean, attempt: suspend (String?) -> T): T {
+    private suspend fun <T> withThinking(model: String, attempt: suspend (String?) -> T): T {
         var variant = store.thinkingVariant(model) ?: 0
         while (true) {
             try {
@@ -206,7 +194,7 @@ class ModelFallback(
                 if (store.thinkingVariant(model) != variant) store.setThinkingVariant(model, variant)
                 return result
             } catch (e: ApiException) {
-                if (e.code != 400 || started() || variant >= THINKING.lastIndex) throw e
+                if (e.code != 400 || variant >= THINKING.lastIndex) throw e
                 variant++
             }
         }

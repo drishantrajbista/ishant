@@ -32,25 +32,25 @@ fun Context.openClaudeInPlayStore() {
 }
 
 /**
- * Hands the screenshot (and, if given, the question) to the Claude app's share target. The question is also put on
+ * Hands the screenshot (and, if given, the question text) to the Claude app's share target. The text is also put on
  * the clipboard as a fallback in case the app ignores shared text that comes with an image.
  * Throws [ActivityNotFoundException] if the Claude app isn't installed or doesn't accept shared images.
  */
-suspend fun Context.shareToClaudeApp(jpeg: ByteArray, question: String?) {
+suspend fun Context.shareToClaudeApp(jpeg: ByteArray, text: String?) {
     val file = withContext(Dispatchers.IO) {
         File(cacheDir, "shots").apply { mkdirs() }.resolve("screen.jpg").also { it.writeBytes(jpeg) }
     }
     val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
-    if (question != null) {
+    if (text != null) {
         (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-            .setPrimaryClip(ClipData.newPlainText("Buddy question", question))
+            .setPrimaryClip(ClipData.newPlainText("Buddy question", text))
     }
     val intent = Intent(Intent.ACTION_SEND)
         .setType("image/jpeg")
         .putExtra(Intent.EXTRA_STREAM, uri)
         .setPackage(CLAUDE_PACKAGE)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    if (question != null) intent.putExtra(Intent.EXTRA_TEXT, question)
+    if (text != null) intent.putExtra(Intent.EXTRA_TEXT, text)
     intent.clipData = ClipData.newRawUri("screenshot", uri)
     startActivity(intent)
 }

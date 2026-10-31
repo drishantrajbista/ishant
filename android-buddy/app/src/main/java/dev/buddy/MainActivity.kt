@@ -17,6 +17,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -31,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -42,6 +44,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
@@ -80,6 +83,7 @@ private fun SetupScreen(settings: Settings) {
     var claudeKey by remember { mutableStateOf(settings.claudeKey) }
     var claudeModel by remember { mutableStateOf(settings.claudeModel) }
     var proxy by remember { mutableStateOf(settings.proxyUrl) }
+    var drawTags by remember { mutableStateOf(settings.drawTags) }
     var fetched by remember { mutableStateOf<List<String>>(emptyList()) }
     var languageMenu by remember { mutableStateOf(false) }
     var claudeInstalled by remember { mutableStateOf(context.isClaudeAppInstalled()) }
@@ -133,27 +137,30 @@ private fun SetupScreen(settings: Settings) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Text("Buddy", style = MaterialTheme.typography.headlineMedium)
-        Text("Hold the floating bubble, ask a question about your screen, and let go.")
+        Text("Hold the floating bubble, ask a question about your screen, and let go. Claude answers, and Buddy can point and draw on your screen.")
 
         // --- Mode ---
         Text("Mode", style = MaterialTheme.typography.titleSmall)
         chip("Claude app (free)", provider == Provider.CLAUDE_APP) { provider = Provider.CLAUDE_APP; settings.provider = provider }
-        chip("Gemini (free, spoken answers)", provider == Provider.GEMINI) { provider = Provider.GEMINI; settings.provider = provider }
         chip("Claude API (pay per use)", provider == Provider.CLAUDE) { provider = Provider.CLAUDE; settings.provider = provider }
 
         when (provider) {
             Provider.CLAUDE_APP -> {
                 Text(
                     "Uses the Claude app on this phone with your normal Claude account. No API key, no extra cost. " +
-                        "Buddy opens Claude with your screenshot and question; you tap send.",
+                        "Buddy opens Claude with your screenshot and question; you tap send. Then tap copy under Claude's " +
+                        "answer and tap the bubble: Buddy reads it aloud and draws on your screen.",
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Ask Claude to point and draw", modifier = Modifier.weight(1f))
+                    Switch(checked = drawTags, onCheckedChange = { drawTags = it; settings.drawTags = it })
+                }
                 if (!claudeInstalled) {
                     OutlinedButton(onClick = { context.openClaudeInPlayStore() }, modifier = Modifier.fillMaxWidth()) {
                         Text("Get the Claude app")
                     }
                 }
             }
-            Provider.GEMINI -> {}
             Provider.CLAUDE -> {
                 Text(
                     "Runs in the background with spoken answers and pointing. Needs an API key from console.anthropic.com " +
@@ -208,8 +215,8 @@ private fun SetupScreen(settings: Settings) {
             }
         }
 
-        // --- Gemini key: needed by the Gemini mode and by Gemini voice, whatever the mode ---
-        if (provider == Provider.GEMINI || voice == VoiceEngine.GEMINI) {
+        // --- Gemini key: Gemini only turns your voice into text ---
+        if (voice == VoiceEngine.GEMINI) {
             Text("Gemini", style = MaterialTheme.typography.titleSmall)
             OutlinedTextField(
                 value = geminiKey, onValueChange = { geminiKey = it; settings.geminiKey = it },
@@ -261,8 +268,8 @@ private fun SetupScreen(settings: Settings) {
         }
         Text(
             "Screenshots are only captured when you release the bubble. Claude app mode hands the screenshot to the " +
-                "Claude app on this phone (Buddy sends nothing itself). Gemini mode sends it to Google, whose free tier " +
-                "may use it to improve its products. Claude API mode sends it to Anthropic (or your proxy). " +
+                "Claude app on this phone (Buddy sends nothing itself). Claude API mode sends it to Anthropic (or your " +
+                "proxy). Gemini, if you pick it for voice, only receives your recording. " +
                 "Don't use Buddy on screens showing sensitive information unless you're happy with that.",
             style = MaterialTheme.typography.bodySmall,
         )

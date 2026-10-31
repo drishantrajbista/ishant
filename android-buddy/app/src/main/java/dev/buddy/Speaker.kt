@@ -56,7 +56,7 @@ class Speaker(context: Context, private val onFinished: () -> Unit) {
 
     /** The stream is complete: speak what is left (POINT tag stripped) and finish once it has all been said. */
     fun end(reply: String) {
-        enqueue(parsePointingCoordinates(reply.substring(spokenUpTo.coerceAtMost(reply.length))).spokenText)
+        enqueue(reply.substring(spokenUpTo.coerceAtMost(reply.length)))
         streamDone = true
         if (ready) finishIfIdle() else main.postDelayed({ finishIfIdle() }, READ_MS)  // no voice: leave the text up
     }
@@ -78,7 +78,7 @@ class Speaker(context: Context, private val onFinished: () -> Unit) {
     private fun enqueue(text: String) {
         val engine = tts ?: return
         if (!ready) return
-        for (piece in text.trim().chunked(TextToSpeech.getMaxSpeechInputLength() - 1)) {
+        for (piece in stripMarkdown(removeTags(text)).chunked(TextToSpeech.getMaxSpeechInputLength() - 1)) {
             useVoiceFor(engine, piece)
             val id = "buddy-${utterances++}"
             if (engine.speak(piece, TextToSpeech.QUEUE_ADD, null, id) == TextToSpeech.SUCCESS) live.add(id)

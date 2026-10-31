@@ -95,6 +95,9 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
     }
     fun setLevel(level: Float) { bubble.level = level.coerceIn(0f, 1f) }
 
+    /** Claude's answer is expected: a small pulsing Claude-orange badge. */
+    fun setWaiting(waiting: Boolean) = bubble.setWaiting(waiting)
+
     /** Shows [text] in the small bubble next to the floating bubble; null hides it. */
     fun setText(text: String?) {
         if (!added) return
@@ -155,7 +158,14 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
             callbacks.onPressStart()
         }
 
+        private var waiting = false
+        private val badge = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0xD9, 0x77, 0x57) }
+        private val badgeEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = dp(2f)
+        }
+
         fun setState(s: BuddyState) { state = s; invalidate() }
+        fun setWaiting(w: Boolean) { waiting = w; invalidate() }
         fun stop() = handler.removeCallbacks(holdRunnable)
 
         override fun onDraw(canvas: Canvas) {
@@ -182,7 +192,12 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
                     lineTo(cx, cy + r * 0.25f); lineTo(cx - r * 0.42f, cy + r * 0.45f); close()
                 }, white)
             }
-            if (state != BuddyState.IDLE) postInvalidateOnAnimation()
+            if (waiting) {
+                val r = dp(6f) * (1f + 0.25f * sin(t / 300.0).toFloat())
+                canvas.drawCircle(cx + dp(15f), cy - dp(15f), r, badge)
+                canvas.drawCircle(cx + dp(15f), cy - dp(15f), r, badgeEdge)
+            }
+            if (state != BuddyState.IDLE || waiting) postInvalidateOnAnimation()
         }
 
         override fun onTouchEvent(e: MotionEvent): Boolean {

@@ -14,6 +14,8 @@ import android.content.pm.ServiceInfo
 import android.graphics.PointF
 import android.media.projection.MediaProjectionManager
 import android.os.IBinder
+import android.util.DisplayMetrics
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -38,9 +40,10 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
 /**
- * Orchestrates push-to-talk -> speech-to-text -> screenshot -> answer (Claude app hand-off, or streamed Gemini/Claude
- * reply spoken sentence by sentence + pointer). Runs as a foreground service (mediaProjection|microphone) so the
- * capture session stays alive.
+ * Orchestrates push-to-talk -> speech-to-text -> screenshot -> answer. Claude app mode hands the screenshot to the
+ * Claude app and later reads its answer back (clipboard or share) to speak it and draw on the screen; Claude API mode
+ * streams the reply, speaking it sentence by sentence. Runs as a foreground service (mediaProjection|microphone) so
+ * the capture session stays alive.
  */
 class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -50,7 +53,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private val conversation = Conversation()
     private var capturer: ScreenCapturer? = null
     private var bubble: BubbleOverlay? = null
-    private var pointer: PointerOverlay? = null
+    private var drawing: DrawingOverlay? = null
 
     private var state = BuddyState.IDLE
     private var recording: VoiceRecording? = null        // Gemini voice: the clip for the press in progress
@@ -58,10 +61,24 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private var shotJob: Deferred<Screenshot>? = null    // the screenshot for the current press
     private var textJob: Job? = null
 
+    /** What the Claude app was sent, kept so its answer can be drawn onto the screen later. */
+    private class Handoff(
+        val shotW: Int, val shotH: Int, val displayW: Int, val displayH: Int,
+        val question: String?, val copied: String?,
+    )
+    private var handoff: Handoff? = null    // non-null while an answer from the Claude app is awaited
+    private var waitJob: Job? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) { stopSelf(); return START_NOT_STICKY }
+        when (intent?.action) {
+            ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
+            ACTION_ANSWER_TEXT -> {
+                if (capturer != null) onAnswerText(intent.getStringExtra(EXTRA_TEXT).orEmpty())
+                return START_NOT_STICKY
+            }
+        }
         val data = intent?.getParcelableExtra<Intent>(EXTRA_DATA)
         val code = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
         if (capturer != null) return START_NOT_STICKY
@@ -78,7 +95,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         val projection = (getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager)
             .getMediaProjection(code, data)
         capturer = ScreenCapturer(this, projection) { stopSelf() }
-        pointer = PointerOverlay(this).also { it.show() }
+        drawing = DrawingOverlay(this).also { it.show() }
         bubble = BubbleOverlay(this, this).also { it.show() }
         speaker = Speaker(this) { finishSpeaking() }
         phone = PhoneListener(this, this)
@@ -133,9 +150,11 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
 
     override fun onTap() {
         when {
-            // Stop everything: the request, any actions, the speech.
+            // Stop everything: the request, the speech, the drawing.
             state == BuddyState.PROCESSING || state == BuddyState.RESPONDING -> { cancelWork(); finishSpeaking() }
-            // Claude app mode: a tap on the idle bubble shares just the screenshot.
+            drawing?.hasContent == true -> drawing?.clear()
+            handoff != null -> showWaitingAnswer()
+            // Claude app mode, nothing waiting: share just the screenshot.
             state == BuddyState.IDLE && settings.provider == Provider.CLAUDE_APP -> {
                 cancelWork()
                 setState(BuddyState.PROCESSING)
@@ -162,27 +181,26 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         setState(BuddyState.PROCESSING)
         startCapture()   // already running if the finger lifted before the recognizer finished
         val shot = shotJob!!
-        launchWork { answer(shot.await(), Question(transcript = transcript)) }
+        launchWork { answer(shot.await(), transcript) }
     }
 
-    /** Gemini voice: the clip either goes straight into the Gemini request, or is transcribed for the Claude modes. */
+    /** Gemini voice: the clip is transcribed (the screenshot is being taken meanwhile), then answered as usual. */
     private suspend fun handleAudio(clip: VoiceRecording, shot: Deferred<Screenshot>) {
         val audio = clip.finish() ?: throw IOException(NOT_HEARD)
-        if (settings.provider == Provider.GEMINI) return respond(shot.await(), Question(audio = audio))
         val transcript = try {
-            GeminiClient(settings) { bubble?.setText(it) }.transcribe(audio)   // the screenshot is being taken meanwhile
+            GeminiClient(settings) { bubble?.setText(it) }.transcribe(audio)
         } catch (e: EmptyReplyException) {
             throw IOException(NOT_HEARD)
         } catch (e: GeminiExhaustedException) {
             settings.markGeminiVoiceOutToday()   // phone voice until the next Pacific midnight, then back to Gemini
-            throw SpokenException(VOICE_OUT_MESSAGE)
+            throw e
         }
         bubble?.setText("heard: ${transcript.take(100)}")
-        answer(shot.await(), Question(transcript = transcript))
+        answer(shot.await(), transcript)
     }
 
-    private suspend fun answer(shot: Screenshot, question: Question) {
-        if (settings.provider == Provider.CLAUDE_APP) handOffToClaude(shot, question.transcript) else respond(shot, question)
+    private suspend fun answer(shot: Screenshot, transcript: String) {
+        if (settings.provider == Provider.CLAUDE_APP) handOffToClaude(shot, transcript) else respond(shot, transcript)
     }
 
     // region screenshot
@@ -193,13 +211,15 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         val forClaudeApp = settings.provider == Provider.CLAUDE_APP
         shotJob = scope.async {
             bubble?.setHiddenForCapture(true)
-            pointer?.dismiss()
+            drawing?.setSuppressed(true)
             try {
                 delay(CAPTURE_DELAY_MS)
-                // The Claude app gets a sharper image than the ones we stream to a model.
-                if (forClaudeApp) capturer!!.capture(2400, 90) else capturer!!.capture()
+                // Claude's image pipeline downsizes anything over ~1456 px / ~1.15 MP, which would shift coordinates;
+                // sending exactly that size keeps the pixels Claude points at the pixels we draw at.
+                if (forClaudeApp) capturer!!.capture(1456, 85, 1_150_000) else capturer!!.capture()
             } finally {
                 bubble?.setHiddenForCapture(false)
+                drawing?.setSuppressed(false)
             }
         }
     }
@@ -208,43 +228,36 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
 
     // region answers
 
-    /** Streams the reply from Gemini/Claude, speaking it sentence by sentence as it arrives. */
-    private suspend fun respond(shot: Screenshot, question: Question) {
+    /** Claude API mode: stream the reply, speaking it sentence by sentence as it arrives, then draw its tags. */
+    private suspend fun respond(shot: Screenshot, transcript: String) {
         speaker.start()
-        var heardLine: String? = null
-        var noticeLine: String? = null   // e.g. "busy, retrying in 13s" or "switched to ..." from the Gemini client
-        fun show(text: String) = bubble?.setText(
-            listOfNotNull(noticeLine, heardLine, text.takeIf { it.isNotBlank() }).joinToString("\n\n").ifBlank { null },
-        )
-
-        val reply = conversation.ask(
-            settings.createProvider { noticeLine = it; show("") }, question, shot,
-            onHeard = { heardLine = "heard: ${it.take(100)}"; show("") },
-            onText = { soFar ->
-                if (state != BuddyState.RESPONDING) setState(BuddyState.RESPONDING)
-                show(speaker.onText(soFar).trim())
-            },
-        )
-        val parsed = parsePointingCoordinates(reply.text)
-        parsed.coordinate?.let { c ->
-            val target = PointF(c.x * shot.displayWidth / shot.width, c.y * shot.displayHeight / shot.height)
-            pointer?.flyTo(bubble!!.center(), target, parsed.label)
+        val reply = conversation.ask(ClaudeClient(settings), transcript, shot) { soFar ->
+            if (state != BuddyState.RESPONDING) setState(BuddyState.RESPONDING)
+            bubble?.setText(stripMarkdown(speaker.onText(soFar)).ifBlank { null })
         }
-        if (parsed.spokenText.isBlank()) showMessage("no answer came back") else speaker.end(reply.text)
+        val answer = parseAnswer(reply)
+        var tail = reply
+        if (answer.shapes.isNotEmpty()) {
+            val map = ScreenMap(shot.width, shot.height, shot.displayWidth, shot.displayHeight)
+            val (w, h) = displaySize()
+            if (map.matches(w, h)) drawing?.play(answer.shapes.map { map.toDisplay(it) }, bubble!!.center())
+            else tail += " the screen rotated, so i can't draw on it."
+        }
+        if (answer.spoken.isBlank()) showMessage("no answer came back") else speaker.end(tail)
     }
 
-    /** Claude app mode: open the Claude app with the screenshot (and question) and let the user tap send. */
+    /** Claude app mode: open the Claude app with the screenshot (and question) and wait for the answer to come back. */
     private suspend fun handOffToClaude(shot: Screenshot, question: String?) {
         setState(BuddyState.IDLE)
         // Android 15 only lets SYSTEM_ALERT_WINDOW apps start activities from the background while one of their
         // overlay windows is visible, so make sure the bubble is back on screen first.
         delay(OVERLAY_VISIBLE_MS)
+        val text = question?.let { handoffText(it, shot.width, shot.height, settings.drawTags) }
         try {
-            shareToClaudeApp(shot.jpeg, question)
-            showMessage(
-                if (question != null) "opened claude, tap send (question also copied)" else "opened claude, tap send",
-                6000,
-            )
+            shareToClaudeApp(shot.jpeg, text)
+            handoff = Handoff(shot.width, shot.height, shot.displayWidth, shot.displayHeight, question, text)
+            startWaiting()
+            showMessage("opened claude. tap send, then tap copy under its answer and tap me", 8000)
         } catch (e: ActivityNotFoundException) {
             if (isClaudeAppInstalled()) {
                 showMessage("this version of the claude app can't take shared screenshots")
@@ -253,6 +266,56 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
                 showMessage("install the Claude app first")
             }
         }
+    }
+
+    /** The bubble was tapped while an answer is awaited: use a shared answer, else read the clipboard (see ClipboardActivity). */
+    private fun showWaitingAnswer() {
+        AnswerInbox.take()?.let { return onAnswerText(it) }
+        startActivity(
+            Intent(this, ClipboardActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION),
+        )
+    }
+
+    private fun onAnswerText(text: String) {
+        val h = handoff
+        if (isOwnText(text, h?.copied, h?.question)) {
+            return showMessage("tap copy under claude's answer first, then tap me", 6000)
+        }
+        cancelWork()
+        endWaiting()
+        present(text, h?.let { ScreenMap(it.shotW, it.shotH, it.displayW, it.displayH) })
+    }
+
+    /** Speaks Claude's answer (tags and markdown removed), shows it, and draws what it asked for. */
+    private fun present(raw: String, map: ScreenMap?) {
+        val answer = parseAnswer(raw)
+        var spoken = stripMarkdown(answer.spoken)
+        if (answer.shapes.isNotEmpty() && map != null) {
+            val (w, h) = displaySize()
+            if (map.matches(w, h)) drawing?.play(answer.shapes.map { map.toDisplay(it) }, bubble!!.center())
+            else spoken = "$spoken the screen rotated since then, so i can't draw on it.".trim()
+        }
+        if (spoken.isBlank()) showMessage("no answer came back") else say(spoken)
+    }
+
+    private fun startWaiting() {
+        bubble?.setWaiting(true)
+        waitJob?.cancel()
+        waitJob = scope.launch { delay(WAIT_MS); endWaiting() }
+    }
+
+    private fun endWaiting() {
+        waitJob?.cancel()
+        handoff = null
+        bubble?.setWaiting(false)
+    }
+
+    private fun displaySize(): Pair<Int, Int> {
+        val m = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        (getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.getRealMetrics(m)
+        return m.widthPixels to m.heightPixels
     }
 
     private fun launchWork(block: suspend () -> Unit) {
@@ -287,7 +350,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         shotJob?.cancel(); shotJob = null
         textJob?.cancel()
         speaker.stop()
-        pointer?.dismiss()
+        drawing?.clear()
     }
 
     private fun discardRecording() { recording?.discard(); recording = null }
@@ -305,7 +368,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private fun finishSpeaking() {
         textJob?.cancel()
         bubble?.setText(null)
-        pointer?.speechEnded()
+        drawing?.speechEnded()
         setState(BuddyState.IDLE)
     }
 
@@ -328,11 +391,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     /** Fire-and-forget GETs so DNS and TLS are already done when the real request goes out. */
     private fun warmUp() {
         val urls = buildSet {
-            when (settings.provider) {
-                Provider.GEMINI -> add(GEMINI_URL)
-                Provider.CLAUDE -> add(settings.proxyUrl.ifBlank { CLAUDE_URL })
-                Provider.CLAUDE_APP -> {}
-            }
+            if (settings.provider == Provider.CLAUDE) add(settings.proxyUrl.ifBlank { CLAUDE_URL })
             if (settings.voiceEngine == VoiceEngine.GEMINI) add(GEMINI_URL)
         }
         for (url in urls) runCatching {
@@ -353,12 +412,19 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
         )
+        // Straight into the invisible clipboard activity (a service trampoline from a notification would be blocked).
+        val showAnswer = PendingIntent.getActivity(
+            this, 1,
+            Intent(this, ClipboardActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_buddy)
             .setContentTitle("Buddy is running")
             .setContentText("Hold the floating bubble to talk")
             .setContentIntent(open)
             .setOngoing(true)
+            .addAction(0, "Show Claude's answer", showAnswer)
             .addAction(0, "Stop", stop)
             .build()
     }
@@ -370,18 +436,20 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         if (::phone.isInitialized) phone.destroy()
         if (::speaker.isInitialized) speaker.shutdown()
         bubble?.remove()
-        pointer?.remove()
+        drawing?.remove()
         capturer?.release()
         super.onDestroy()
     }
 
     companion object {
         const val ACTION_STOP = "dev.buddy.STOP"
+        const val ACTION_ANSWER_TEXT = "dev.buddy.ANSWER_TEXT"
+        const val EXTRA_TEXT = "text"
         private const val EXTRA_RESULT_CODE = "result_code"
         private const val EXTRA_DATA = "projection_data"
         private const val CHANNEL_ID = "buddy"
         private const val NOTIFICATION_ID = 1
-        private const val VOICE_OUT_MESSAGE = "gemini voice is out for today, switched to phone voice. please ask again."
+        private const val WAIT_MS = 10 * 60_000L
         private const val CAPTURE_DELAY_MS = 150L
         private const val OVERLAY_VISIBLE_MS = 150L
         private const val GEMINI_URL = "https://generativelanguage.googleapis.com/"
