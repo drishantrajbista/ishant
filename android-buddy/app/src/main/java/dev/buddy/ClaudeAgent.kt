@@ -25,7 +25,7 @@ interface Phone {
  * android_nav. The message list is strictly append-only (every response's `content` is echoed back untouched, thinking
  * blocks and signatures included) and survives between holds until it is 10 minutes idle or 40 messages long.
  */
-class ClaudeAgent(private val settings: Settings) {
+class ClaudeAgent(private val settings: Settings, private val phoneContext: () -> String = { "" }) {
     private var messages = JSONArray()
     private var lastAt = 0L
 
@@ -41,6 +41,8 @@ class ClaudeAgent(private val settings: Settings) {
         acted = false
 
         val content = JSONArray()
+        // The first message of a conversation says what phone this is, what's in front and which default apps to use.
+        if (messages.length() == 0) phoneContext().takeIf { it.isNotBlank() }?.let { content.put(AgentJson.text(it)) }
         // A cancelled request can leave tool calls unanswered; they must be answered before anything else.
         AgentJson.pendingToolUses(messages).forEach {
             content.put(AgentJson.result(it, null, "Cancelled: the user stopped the previous request."))

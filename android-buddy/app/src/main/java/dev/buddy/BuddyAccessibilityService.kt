@@ -33,7 +33,10 @@ class BuddyAccessibilityService : AccessibilityService() {
     override fun onDestroy() { instance = null; super.onDestroy() }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        try { lastEventAt = SystemClock.uptimeMillis() } catch (e: Throwable) { /* ultra-light and never throws */ }
+        try {
+            lastEventAt = SystemClock.uptimeMillis()
+            if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) event.packageName?.toString()?.let { foregroundPackage = it }
+        } catch (e: Throwable) { /* ultra-light and never throws */ }
     }
 
     override fun onInterrupt() { try { acted() } catch (e: Throwable) { android.util.Log.e("Buddy", "onInterrupt", e) } }
@@ -218,6 +221,8 @@ class BuddyAccessibilityService : AccessibilityService() {
 
     companion object {
         @Volatile var instance: BuddyAccessibilityService? = null
+        /** The package of the last window that came to the front (from window-change events). */
+        @Volatile var foregroundPackage: String? = null
         private const val QUIET_MS = 250L
         private const val SETTLE_MAX_MS = 1000L
         private const val TOO_SOON = 3      // ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT

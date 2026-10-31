@@ -337,3 +337,51 @@ class LanguagesTest {
         assertEquals(listOf("", "en-IN", "en-US", "en-GB"), ACCENTS.map { it.first })
     }
 }
+
+class PhoneContextTest {
+    private val defaults = listOf(
+        DefaultApp("browser", "Chrome", "com.android.chrome"), DefaultApp("dialer", "Phone", "com.samsung.android.dialer"),
+        DefaultApp("maps", null, null), DefaultApp("camera", "Camera", "com.sec.android.app.camera"),
+    )
+
+    @Test fun defaultAppLines() {
+        assertEquals(
+            "browser: Chrome (com.android.chrome)\ndialer: Phone (com.samsung.android.dialer)\nmaps: no default set\ncamera: Camera (com.sec.android.app.camera)",
+            formatDefaultApps(defaults),
+        )
+        assertEquals("", formatDefaultApps(emptyList()))
+    }
+
+    @Test fun chooserMeansNoDefault() {
+        assertTrue(isChooser("android", "com.android.internal.app.ResolverActivity"))
+        assertTrue(isChooser("com.something", "com.android.internal.app.ChooserActivity"))
+        assertTrue(isChooser(null, null))
+        assertFalse(isChooser("com.android.chrome", "com.google.android.apps.chrome.Main"))
+    }
+
+    @Test fun contextBlockHasTheFacts() {
+        val text = phoneContext("samsung SM-S918B", "Android 15", "Gmail", defaults)
+        assertEquals("phone: samsung SM-S918B, Android 15. foreground app: Gmail. default apps: browser Chrome, dialer Phone, camera Camera.", text)
+    }
+
+    @Test fun noEmptyFields() {
+        val bare = phoneContext("Pixel 8", "Android 15", null, listOf(DefaultApp("maps", null, null)))
+        assertEquals("phone: Pixel 8, Android 15.", bare)
+        val blankForeground = phoneContext("Pixel 8", "Android 15", "  ", emptyList())
+        assertFalse(blankForeground.contains("foreground"))
+        assertFalse(blankForeground.contains("default apps"))
+        for (t in listOf(bare, blankForeground)) assertFalse(t.contains("null") || t.contains(": ."))
+    }
+
+    @Test fun lengthIsCapped() {
+        val many = (1..40).map { DefaultApp("kind$it", "A very long app label number $it", "pkg.$it") }
+        val text = phoneContext("Some Manufacturer Some Very Long Model Name", "Android 15", "Foreground ".repeat(20), many)
+        assertTrue(text.length <= MAX_CONTEXT)
+        assertTrue(text.endsWith("…"))
+        assertTrue(phoneContext("Pixel", "Android 15", "Gmail", defaults).length < MAX_CONTEXT)
+    }
+
+    @Test fun defaultAppsIsALookingTool() {
+        assertFalse(isActionTool("default_apps"))
+    }
+}

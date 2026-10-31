@@ -137,6 +137,14 @@ commands also know a few common Nepali/Hindi phrases, Romanized or Devanagari ("
 "flashlight band karo", "volume badhau", "pachadi"); anything unsure goes to Claude. Spoken replies can use an English
 accent of your choice (default English India, if the phone's voice has it).
 
+### Phone context and default apps
+
+The first message of each conversation carries a short note (under ~400 characters): the phone model, Android version,
+the app in front (from accessibility window events) and your default apps (browser, dialer, messages, email, camera, maps,
+music, gallery, launcher, resolved with `PackageManager`; a chooser means "no default set"). Claude uses it to pick your own
+apps, e.g. links in your default browser, photos with your camera app; messages and calls stay as drafts you send yourself.
+There is also a `default_apps` tool. The manifest `<queries>` list the matching intents; no `QUERY_ALL_PACKAGES`.
+
 ## Voice recognition
 
 Setup has a **Voice recognition** setting with two engines.

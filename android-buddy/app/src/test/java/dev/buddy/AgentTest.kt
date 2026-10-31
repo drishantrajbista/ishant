@@ -28,7 +28,7 @@ class AgentJsonTest {
 
     @Test fun customToolsAreStrictOnlyWhenTheyHaveProperties() {
         val tools = AgentJson.tools()
-        assertEquals(16, tools.length())
+        assertEquals(17, tools.length())
         for (i in 1 until tools.length()) {
             val t = tools.getJSONObject(i)
             val schema = t.getJSONObject("input_schema")
@@ -39,22 +39,22 @@ class AgentJsonTest {
                 assertTrue(JSONObject("""{"type":"object","properties":{},"additionalProperties":false}""").similar(schema))
             } else assertTrue(t.getString("name"), t.getBoolean("strict"))
         }
-        val nav = tools.getJSONObject(15).getJSONObject("input_schema").getJSONObject("properties").getJSONObject("action")
+        val nav = tools.getJSONObject(16).getJSONObject("input_schema").getJSONObject("properties").getJSONObject("action")
         assertEquals(setOf("back", "home", "recents", "notifications", "quick_settings"), (0 until 5).map { nav.getJSONArray("enum").getString(it) }.toSet())
     }
 
     @Test fun toolsAreDeclaredInOrder() {
-        val names = (0 until 16).map { AgentJson.tools().getJSONObject(it).let { t -> t.optString("name").ifEmpty { t.getString("type") } } }
+        val names = (0 until 17).map { AgentJson.tools().getJSONObject(it).let { t -> t.optString("name").ifEmpty { t.getString("type") } } }
         assertEquals(
             listOf("computer_toolset_20260801", "open_app", "open_url", "open_settings", "list_apps", "set_alarm", "set_timer", "create_event",
-                "read_calendar", "read_notifications", "media", "torch", "volume", "device_status", "web_search", "android_nav"),
+                "read_calendar", "read_notifications", "media", "torch", "volume", "device_status", "default_apps", "web_search", "android_nav"),
             names,
         )
         assertEquals(17, AgentJson.SETTINGS_PAGES.size)
     }
 
     @Test fun actionToolSchemas() {
-        fun tool(name: String) = (0 until 16).map { AgentJson.tools().getJSONObject(it) }.first { it.optString("name") == name }
+        fun tool(name: String) = (0 until 17).map { AgentJson.tools().getJSONObject(it) }.first { it.optString("name") == name }
         fun req(name: String) = (0 until tool(name).getJSONObject("input_schema").getJSONArray("required").length())
             .map { tool(name).getJSONObject("input_schema").getJSONArray("required").getString(it) }
         assertEquals(listOf("hour", "minute"), req("set_alarm"))

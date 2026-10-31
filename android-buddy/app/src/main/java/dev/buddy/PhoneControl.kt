@@ -111,6 +111,7 @@ class PhoneControl(private val context: Context, private val stage: Stage) : Pho
             "media" -> { stage.status("media ${use.input.optString("action")}"); if (!context.mediaKey(use.input.optString("action"))) throw ToolError("unknown media action") }
             "torch" -> { stage.status("flashlight"); if (!context.setTorch(use.input.optBoolean("on"))) throw ToolError("this phone has no flashlight") }
             "volume" -> { stage.status("volume"); if (!context.changeVolume(use.input.optString("action"))) throw ToolError("unknown volume action") }
+            "default_apps" -> shotResult = listOf(AgentJson.text(formatDefaultApps(context.defaultApps())))
             "device_status" -> shotResult = listOf(AgentJson.text(context.deviceStatus()))
             "web_search" -> { stage.status("searching"); context.webSearch(use.input.optString("query")); a11y?.acted() }
             "list_apps" -> {

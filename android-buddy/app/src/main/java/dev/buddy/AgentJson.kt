@@ -68,6 +68,7 @@ object AgentJson {
             .put(custom("volume", "Change the media volume.",
                 JSONObject().put("action", JSONObject().put("type", "string").put("enum", JSONArray(listOf("up", "down", "mute", "max")))), listOf("action")))
             .put(custom("device_status", "Battery, charging, time and date, wifi and ringer mode.", JSONObject(), emptyList()))
+            .put(custom("default_apps", "The user's default apps (browser, dialer, messages, email, camera, maps, music, gallery, launcher).", JSONObject(), emptyList()))
             .put(custom("web_search", "Search the web in the browser.", JSONObject().put("query", prop("string", "what to search for")), listOf("query")))
             .put(custom(
                 "android_nav", "Android system navigation.",

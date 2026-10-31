@@ -142,7 +142,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
                 stopSelf()
             }
         }
-        agent = ClaudeAgent(settings)
+        agent = ClaudeAgent(settings) { phoneContextText() }
         control = PhoneControl(this, stage)
         drawing = DrawingOverlay(this).also { it.show() }
         bubble = BubbleOverlay(this, this).also {
@@ -363,6 +363,13 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         replyEligible = settings.conversationMode
         say(text)
     }
+
+    private fun phoneContextText(): String = try {
+        phoneContext(
+            "${Build.MANUFACTURER} ${Build.MODEL}", "Android ${Build.VERSION.RELEASE}",
+            appLabel(BuddyAccessibilityService.foregroundPackage?.takeIf { it != packageName }), defaultApps(),
+        )
+    } catch (e: RuntimeException) { "" }
 
     /** Simple commands ("open YouTube", "flashlight on", "volume up", "go home") run right here, with no Claude call. */
     private suspend fun tryLocal(transcript: String): Boolean {
