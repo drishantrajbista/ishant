@@ -17,3 +17,4 @@ captures/
 keystore.properties
 *.jks
 brag-output/work/
+brag-output-*/composition/assets/
