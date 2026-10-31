@@ -148,7 +148,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         bubble = BubbleOverlay(this, this).also {
             check(it.show()) { "couldn't draw the bubble. allow 'draw over other apps' in settings" }
         }
-        speaker = Speaker(this, { settings.speechRate }) { finishSpeaking() }
+        speaker = Speaker(this, { settings.speechRate }, { settings.voiceAccent }) { finishSpeaking() }
         phone = PhoneListener(this, this)
         if (projectionNeeded) ScreenProbe.projection = { capturer!!.frame() }
         ready = true

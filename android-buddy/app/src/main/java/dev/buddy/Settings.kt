@@ -17,7 +17,18 @@ const val DEFAULT_GEMINI_MODEL = LITE_LATEST
 private const val OLD_DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
 
 /** (BCP-47 tag, or "" for the device default) to label, for the phone recognizer. */
+const val AUTO_LANGUAGE = "auto"
+val AUTO_LANGUAGES = listOf("en-IN", "ne-NP", "hi-IN")
+
+/** The language tag the recognizer is told to prefer: Auto starts from Indian English. */
+fun recognizerLanguage(setting: String) = if (setting == AUTO_LANGUAGE) "en-IN" else setting
+
+/** "" means the device default; unset means English (India), if the phone's TTS has it. */
+const val DEFAULT_ACCENT = "en-IN"
+val ACCENTS = listOf("" to "Device default", "en-IN" to "English (India)", "en-US" to "English (US)", "en-GB" to "English (UK)")
+
 val SPEECH_LANGUAGES = listOf(
+    AUTO_LANGUAGE to "Auto: English + Nepali + Hindi",
     "" to "Device default",
     "en-US" to "English (US) en-US",
     "en-GB" to "English (UK) en-GB",
@@ -97,7 +108,15 @@ class Settings(context: Context) : QuotaStore {
         get() = prefs.getInt("hints_shown", 0)
         set(v) = prefs.edit().putInt("hints_shown", v).apply()
 
-    var speechLanguage: String get() = str("speech_language"); set(v) = put("speech_language", v)
+    /** Phone voice language; new installs use Auto (English + Nepali + Hindi). */
+    var speechLanguage: String
+        get() = if (prefs.contains("speech_language")) str("speech_language") else AUTO_LANGUAGE
+        set(v) = put("speech_language", v)
+
+    /** The accent of spoken replies (all replies are English); unset means English (India). */
+    var voiceAccent: String
+        get() = if (prefs.contains("voice_accent")) str("voice_accent") else DEFAULT_ACCENT
+        set(v) = put("voice_accent", v)
     var geminiKey: String get() = str("gemini_key"); set(v) = put("gemini_key", v)
     var geminiModel: String get() = str("gemini_model", DEFAULT_GEMINI_MODEL); set(v) = put("gemini_model", v)
     var claudeKey: String get() = str("api_key"); set(v) = put("api_key", cleanKey(v))

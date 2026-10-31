@@ -2,6 +2,7 @@ package dev.buddy
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -89,9 +90,15 @@ class PhoneListener(private val context: Context, private val events: Events) {
             // Hints to wait longer before deciding the sentence is over (not every recognizer honours them).
             .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
             .putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
-        if (language.isNotBlank()) {
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
-                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language)
+        val tag = recognizerLanguage(language)
+        if (tag.isNotBlank()) {
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag).putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, tag)
+        }
+        if (language == AUTO_LANGUAGE && Build.VERSION.SDK_INT >= 34) {
+            // Mixed Nepali/Hindi/English: let the recognizer detect and follow the language as you switch.
+            intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
+                .putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, ArrayList(AUTO_LANGUAGES))
+                .putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED)
         }
         r.startListening(intent)
     }

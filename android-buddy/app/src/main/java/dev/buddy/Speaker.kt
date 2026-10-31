@@ -11,11 +11,12 @@ import java.util.Locale
  * Speaks a reply. [onFinished] fires on the main thread once everything queued has been spoken. Text containing
  * Devanagari is read with a Nepali (or Hindi) voice.
  */
-class Speaker(context: Context, private val rate: () -> Float, private val onFinished: () -> Unit) {
+class Speaker(context: Context, private val rate: () -> Float, private val accent: () -> String, private val onFinished: () -> Unit) {
     private val main = Handler(Looper.getMainLooper())
     private var tts: TextToSpeech? = null
     private var ready = false
     private var devanagari = false   // which voice is currently set
+    private var currentAccent: String? = null
     private var utterances = 0
     private var streamDone = false
     private val live = HashSet<String>()   // queued utterance ids that haven't finished
@@ -30,8 +31,7 @@ class Speaker(context: Context, private val rate: () -> Float, private val onFin
 
     init {
         tts = TextToSpeech(context) { status ->
-            ready = status == TextToSpeech.SUCCESS
-            if (ready) tts?.language = Locale.getDefault()
+            ready = status == TextToSpeech.SUCCESS   // the voice is chosen on the first reply, from the accent setting
         }.also { it.setOnUtteranceProgressListener(listener) }
     }
 
@@ -76,11 +76,21 @@ class Speaker(context: Context, private val rate: () -> Float, private val onFin
     /** Devanagari text gets a Nepali voice (Hindi if that isn't installed); everything else the device default. */
     private fun useVoiceFor(engine: TextToSpeech, text: String) {
         val wantDevanagari = text.any { it in 'ऀ'..'ॿ' }
-        if (wantDevanagari == devanagari) return
-        devanagari = wantDevanagari
         if (!wantDevanagari) {
-            engine.language = Locale.getDefault()
-        } else if (engine.setLanguage(Locale.forLanguageTag("ne-NP")) < TextToSpeech.LANG_AVAILABLE) {
+            // Replies are English: use the chosen accent if the TTS has it, else the device default.
+            if (devanagari || currentAccent != accent()) {
+                currentAccent = accent()
+                val tag = accent()
+                val wanted = if (tag.isBlank()) Locale.getDefault() else Locale.forLanguageTag(tag)
+                if (engine.setLanguage(wanted) < TextToSpeech.LANG_AVAILABLE) engine.language = Locale.getDefault()
+            }
+            devanagari = false
+            return
+        }
+        if (devanagari) return
+        devanagari = true
+        // Devanagari is only a fallback (replies are English): a Nepali voice, or Hindi if that isn't installed.
+        if (engine.setLanguage(Locale.forLanguageTag("ne-NP")) < TextToSpeech.LANG_AVAILABLE) {
             engine.setLanguage(Locale.forLanguageTag("hi-IN"))
         }
     }

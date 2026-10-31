@@ -52,7 +52,7 @@ Answers always come from Claude. Gemini is only an optional voice-to-text engine
    ```
    <question>
 
-   [buddy: my screenshot is WxH px. answer to the point in one short sentence (more only if i ask), no markdown. to show me on screen add tags in screenshot pixels: [POINT:x,y:label] [CIRCLE:x,y,r] [BOX:x1,y1,x2,y2] [ARROW:x1,y1,x2,y2] [LINE:x1,y1,x2,y2] [PATH:x1,y1,x2,y2,...] [TEXT:x,y:words]]
+   [buddy: my screenshot is WxH px. answer to the point in one short sentence in english (more only if i ask), no markdown. to show me on screen add tags in screenshot pixels: [POINT:x,y:label] [CIRCLE:x,y,r] [BOX:x1,y1,x2,y2] [ARROW:x1,y1,x2,y2] [LINE:x1,y1,x2,y2] [PATH:x1,y1,x2,y2,...] [TEXT:x,y:words]]
    ```
 3. **Send:** tap send in the Claude app. (If your question didn't arrive with the screenshot, paste it: it is on the
    clipboard.)
@@ -126,6 +126,16 @@ mode".
 
 **Drag to close:** drag the bubble and a close target fades in at the bottom; drop the bubble on it to stop Buddy. Let
 go elsewhere and it springs to the nearest screen edge.
+
+## Languages
+
+Speak Nepali, Hindi, English or a mix, in any script: Claude understands it and **always replies in simple English** (the
+prompt and the Claude-app hand-off text both say so). Phone voice defaults to **Auto: English + Nepali + Hindi** (on
+Android 14+ the recognizer detects and follows the language as you switch; earlier versions use Indian English), and
+Gemini voice, which writes each word in its own language and script, is the most accurate for mixes. The instant local
+commands also know a few common Nepali/Hindi phrases, Romanized or Devanagari ("youtube kholo", "torch on gara",
+"flashlight band karo", "volume badhau", "pachadi"); anything unsure goes to Claude. Spoken replies can use an English
+accent of your choice (default English India, if the phone's voice has it).
 
 ## Voice recognition
 

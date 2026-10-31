@@ -69,7 +69,7 @@ private val FILLER_END = Regex(" (please|for me|now)$")
 
 /** Lowercase letters/digits/spaces only, with polite filler ("please", "can you", "for me") stripped. */
 fun normalizeCommand(transcript: String): String =
-    transcript.lowercase().replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
+    transcript.lowercase().replace(Regex("[^a-z0-9\\u0900-\\u097F ]"), " ").replace(Regex("\\s+"), " ").trim()
         .replace(FILLER_START, "").replace(FILLER_END, "").trim()
 
 /**
@@ -88,6 +88,23 @@ fun confidentApp(name: String, labels: List<String>): String? {
 private val SETTINGS_WORDS = mapOf("wifi" to "wifi", "wi fi" to "wifi", "bluetooth" to "bluetooth", "display" to "display",
     "battery" to "battery", "sound" to "sound", "location" to "location")
 
+// Nepali / Hindi (Romanized or Devanagari): a small, conservative set. Anything unsure goes to Claude.
+private val OPEN_WORDS = "kholo|khola|kholdeu|kholnu|khol|chalau|chalao|खोलदेउ|खोलनु|खोलो|खोल"
+private val ON_WORDS = setOf("on", "chalu", "चालु", "चालू", "अन", "chalau", "chalao")
+private val OFF_WORDS = setOf("off", "band", "bandh", "बन्द", "बंद", "अफ")
+private val TORCH_WORDS = setOf("torch", "flashlight", "टर्च", "फ्लैशलाइट")
+private val FILL_WORDS = setOf("gara", "garnu", "karo", "kar", "do", "deu", "dinu", "dijiye", "the", "turn", "switch", "गर", "गरनु", "करो", "कर", "देउ")
+
+/** "torch on gara", "flashlight band karo", "torch chalu": a torch word plus exactly one of on/off. */
+private fun multilingualTorch(t: String): LocalCommand.Torch? {
+    val words = t.split(' ')
+    if (words.none { it in TORCH_WORDS } || words.size > 5) return null
+    if (!words.all { it in TORCH_WORDS || it in ON_WORDS || it in OFF_WORDS || it in FILL_WORDS }) return null
+    val on = words.any { it in ON_WORDS }
+    val off = words.any { it in OFF_WORDS }
+    return if (on != off) LocalCommand.Torch(on) else null
+}
+
 /** Matches the handful of phrases that can run locally; [labels] (the launchable apps) is only read for "open <app>". */
 fun routeLocal(transcript: String, labels: () -> List<String>): LocalCommand? {
     val t = normalizeCommand(transcript)
@@ -98,6 +115,12 @@ fun routeLocal(transcript: String, labels: () -> List<String>): LocalCommand? {
     if (Regex("^(open|show|pull down) (the )?notifications?( panel| shade)?$").matches(t)) return LocalCommand.Nav("notifications")
     if (Regex("^(open|show|pull down) (the )?quick settings( panel)?$").matches(t)) return LocalCommand.Nav("quick_settings")
 
+    multilingualTorch(t)?.let { return it }
+    Regex("^(pachadi|peeche|pichhe|पछाडि|पीछे)( (jau|jao|ja|जाउ|जाओ))?$").find(t)?.let { return LocalCommand.Nav("back") }
+    Regex("^(home (jau|jao|ja)|होम( जाउ| जाओ)?)$").find(t)?.let { return LocalCommand.Nav("home") }
+    if (Regex("^volume (badhau|badhao|badha|बढाउ|बढ़ाओ)$").matches(t)) return LocalCommand.Volume("up")
+    if (Regex("^volume (ghatau|ghatao|ghata|घटाउ|घटाओ)$").matches(t)) return LocalCommand.Volume("down")
+    if (Regex("^volume (band|bandh)( gara| karo)?$").matches(t)) return LocalCommand.Volume("mute")
     Regex("^(?:(?:turn|switch) (on|off) (?:the )?|(?:turn|switch) (?:the )?)?(?:flashlight|torch)(?: (on|off))?$").find(t)?.let { m ->
         val state = m.groupValues[1].ifEmpty { m.groupValues[2] }
         if (state.isNotEmpty()) return LocalCommand.Torch(state == "on")
@@ -126,6 +149,11 @@ fun routeLocal(transcript: String, labels: () -> List<String>): LocalCommand? {
     Regex("^(?:open|launch|start) (?:the )?(.+?)(?: app)?$").find(t)?.let { m ->
         val name = m.groupValues[1]
         if (name.split(' ').size <= 4) confidentApp(name, labels())?.let { return LocalCommand.OpenApp(it) }
+    }
+    // "youtube kholo", "kholo youtube", "gmail chalau": the verb comes last (or first) in Nepali and Hindi
+    (Regex("^(.+?) (?:$OPEN_WORDS)$").find(t) ?: Regex("^(?:$OPEN_WORDS) (.+)$").find(t))?.let { m ->
+        val name = m.groupValues[1].removeSuffix(" app").removePrefix("app ")
+        if (name.split(' ').size <= 3 && name.split(' ').none { it in TORCH_WORDS }) confidentApp(name, labels())?.let { return LocalCommand.OpenApp(it) }
     }
     return null
 }

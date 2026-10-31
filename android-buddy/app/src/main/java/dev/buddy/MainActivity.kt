@@ -130,6 +130,7 @@ private class AppState(private val context: Context, val settings: Settings) {
     var provider by mutableStateOf(settings.provider)
     var voiceChoice by mutableStateOf(settings.voiceChoice)
     var speechLanguage by mutableStateOf(settings.speechLanguage)
+    var voiceAccent by mutableStateOf(settings.voiceAccent)
     var speechRate by mutableFloatStateOf(settings.speechRate)
     var geminiKey by mutableStateOf(settings.geminiKey)
     var geminiModel by mutableStateOf(settings.geminiModel)
@@ -181,6 +182,7 @@ private class AppState(private val context: Context, val settings: Settings) {
     fun saveClaudeModel(m: String) { claudeModel = m; settings.claudeModel = m }
     fun saveGeminiModel(m: String) { geminiModel = m; settings.geminiModel = m }
     fun setLanguage(tag: String) { speechLanguage = tag; settings.speechLanguage = tag }
+    fun saveAccent(tag: String) { voiceAccent = tag; settings.voiceAccent = tag }
     fun setDraw(on: Boolean) { drawTags = on; settings.drawTags = on }
     fun saveConversation(on: Boolean) { conversation = on; settings.conversationMode = on }
 }
@@ -406,6 +408,7 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
     val checking by SetupCheck.running.collectAsState()
     val scroll = rememberScrollState()
     var languageMenu by remember { mutableStateOf(false) }
+    var accentMenu by remember { mutableStateOf(false) }
     val spring = motion<androidx.compose.ui.unit.IntSize>()
     fun fixIt(f: Fix) = when (f) {
         Fix.SWITCH_TO_API -> state.pick(Provider.CLAUDE)
@@ -489,6 +492,11 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
                         SegmentedControl(listOf("Phone", "Gemini"), segmentIndex(listOf(VoiceEngine.PHONE, VoiceEngine.GEMINI), state.voice),
                             { state.pick(if (it == 0) VoiceEngine.PHONE else VoiceEngine.GEMINI) })
                     }
+                    Text(
+                        "For mixed Nepali/Hindi/English, Gemini voice is the most accurate.",
+                        style = MaterialTheme.typography.bodySmall, color = colors.labelSecondary,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                    )
                     Hairline()
                     if (state.voice == VoiceEngine.GEMINI) {
                         SettingRow("Gemini", "Most accurate (adds about 1–2 s). Handles accents and mixed languages.", Icons.Default.Call, Tint.Blue)
@@ -534,6 +542,16 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
                             DropdownMenu(languageMenu, { languageMenu = false }) {
                                 SPEECH_LANGUAGES.forEach { (tag, label) -> DropdownMenuItem(text = { Text(label) }, onClick = { state.setLanguage(tag); languageMenu = false }) }
                             }
+                        }
+                    }
+                    Hairline()
+                    Box {
+                        SettingRow("Voice accent", "How replies sound (replies are always English)", Icons.Default.Star, Tint.Orange, onClick = { accentMenu = true }) {
+                            ValueText(ACCENTS.firstOrNull { it.first == state.voiceAccent }?.second ?: state.voiceAccent)
+                            Chevron()
+                        }
+                        DropdownMenu(accentMenu, { accentMenu = false }) {
+                            ACCENTS.forEach { (tag, label) -> DropdownMenuItem(text = { Text(label) }, onClick = { state.saveAccent(tag); accentMenu = false }) }
                         }
                     }
                     Hairline()

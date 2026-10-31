@@ -276,3 +276,64 @@ class CrashLogTest {
         assertFalse(text.contains(key))
     }
 }
+
+class LanguagesTest {
+    private val apps = listOf("YouTube", "Gmail", "WhatsApp", "Camera")
+    private fun route(t: String) = routeLocal(t) { apps }
+
+    @Test fun nepaliAndHindiOpen() {
+        assertEquals(LocalCommand.OpenApp("YouTube"), route("youtube kholo"))
+        assertEquals(LocalCommand.OpenApp("Gmail"), route("gmail khola"))
+        assertEquals(LocalCommand.OpenApp("Camera"), route("camera kholdeu"))
+        assertEquals(LocalCommand.OpenApp("WhatsApp"), route("kholo whatsapp"))
+        assertEquals(LocalCommand.OpenApp("Gmail"), route("gmail chalau"))
+        assertEquals(LocalCommand.OpenApp("YouTube"), route("youtube खोलो"))
+        assertNull(route("spotify kholo"))                 // not installed: Claude explains
+        assertNull(route("यूट्यूब खोलो"))                  // another script than the app's label: not confident
+        assertNull(route("youtube kholo ra lofi sunau"))   // more than an app name
+    }
+
+    @Test fun torch() {
+        assertEquals(LocalCommand.Torch(true), route("torch on gara"))
+        assertEquals(LocalCommand.Torch(true), route("torch chalu"))
+        assertEquals(LocalCommand.Torch(true), route("torch chalao"))
+        assertEquals(LocalCommand.Torch(true), route("टर्च अन"))
+        assertEquals(LocalCommand.Torch(false), route("flashlight band karo"))
+        assertEquals(LocalCommand.Torch(false), route("torch bandh"))
+        assertEquals(LocalCommand.Torch(false), route("टर्च बन्द"))
+        assertNull(route("torch"))
+        assertNull(route("torch on band"))
+    }
+
+    @Test fun volumeBackHome() {
+        assertEquals(LocalCommand.Volume("up"), route("volume badhau"))
+        assertEquals(LocalCommand.Volume("up"), route("volume badhao"))
+        assertEquals(LocalCommand.Volume("down"), route("volume ghatau"))
+        assertEquals(LocalCommand.Volume("down"), route("volume ghatao"))
+        assertEquals(LocalCommand.Volume("mute"), route("volume band karo"))
+        assertEquals(LocalCommand.Nav("back"), route("pachadi"))
+        assertEquals(LocalCommand.Nav("back"), route("peeche jao"))
+        assertEquals(LocalCommand.Nav("back"), route("पछाडि"))
+        assertEquals(LocalCommand.Nav("back"), route("पीछे"))
+        assertEquals(LocalCommand.Nav("home"), route("home jau"))
+        assertEquals(LocalCommand.Nav("home"), route("home jao"))
+        assertEquals(LocalCommand.Nav("home"), route("होम"))
+    }
+
+    @Test fun devanagariSurvivesNormalizationAndEnglishStillWorks() {
+        assertEquals("youtube खोलो", normalizeCommand("YouTube, खोलो!"))
+        assertEquals(LocalCommand.Torch(true), route("turn on the flashlight"))
+        assertEquals(LocalCommand.OpenApp("YouTube"), route("open youtube"))
+        assertNull(route("hello there"))
+    }
+
+    @Test fun recognizerLanguageAndDefaults() {
+        assertEquals("en-IN", recognizerLanguage(AUTO_LANGUAGE))
+        assertEquals("ne-NP", recognizerLanguage("ne-NP"))
+        assertEquals("", recognizerLanguage(""))
+        assertEquals(listOf("en-IN", "ne-NP", "hi-IN"), AUTO_LANGUAGES)
+        assertEquals(AUTO_LANGUAGE, SPEECH_LANGUAGES.first().first)
+        assertEquals("en-IN", DEFAULT_ACCENT)
+        assertEquals(listOf("", "en-IN", "en-US", "en-GB"), ACCENTS.map { it.first })
+    }
+}
