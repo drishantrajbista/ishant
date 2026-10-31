@@ -31,8 +31,13 @@ class AgentJsonTest {
         assertEquals(6, tools.length())
         for (i in 1..5) {
             val t = tools.getJSONObject(i)
-            assertTrue(t.getBoolean("strict"))
             assertFalse(t.getJSONObject("input_schema").getBoolean("additionalProperties"))
+            if (t.getString("name") == "list_apps") {
+                // No properties: no "strict" and no "required" key.
+                assertFalse(t.has("strict"))
+                assertFalse(t.getJSONObject("input_schema").has("required"))
+                assertTrue(JSONObject("""{"type":"object","properties":{},"additionalProperties":false}""").similar(t.getJSONObject("input_schema")))
+            } else assertTrue(t.getString("name"), t.getBoolean("strict"))
         }
         assertEquals("open_app", tools.getJSONObject(1).getString("name"))
         val nav = tools.getJSONObject(5).getJSONObject("input_schema").getJSONObject("properties").getJSONObject("action")

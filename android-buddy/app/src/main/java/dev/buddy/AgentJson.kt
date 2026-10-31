@@ -55,10 +55,15 @@ object AgentJson {
             ))
     }
 
-    private fun custom(name: String, description: String, props: JSONObject, required: List<String>) = JSONObject()
-        .put("name", name).put("description", description).put("strict", true)
-        .put("input_schema", JSONObject().put("type", "object").put("properties", props)
-            .put("required", JSONArray(required)).put("additionalProperties", false))
+    /** `strict: true` is left off for a tool with no properties (list_apps): not known to be accepted for an empty schema. */
+    private fun custom(name: String, description: String, props: JSONObject, required: List<String>): JSONObject {
+        val schema = JSONObject().put("type", "object").put("properties", props)
+        if (required.isNotEmpty()) schema.put("required", JSONArray(required))
+        schema.put("additionalProperties", false)
+        val tool = JSONObject().put("name", name).put("description", description).put("input_schema", schema)
+        if (props.length() > 0) tool.put("strict", true)
+        return tool
+    }
 
     /** Non-streaming request. [messages] is passed as is: it is append-only. */
     fun request(model: String, system: String, messages: JSONArray): JSONObject {

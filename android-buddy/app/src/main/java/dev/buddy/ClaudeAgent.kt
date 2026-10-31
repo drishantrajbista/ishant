@@ -37,9 +37,10 @@ class ClaudeAgent(private val settings: Settings) {
         AgentJson.pendingToolUses(messages).forEach {
             content.put(AgentJson.result(it, null, "Cancelled: the user stopped the previous request."))
         }
-        content.put(AgentJson.image(first.shot.jpeg))
-            .put(AgentJson.text(screenText(first)))
+        // Instruction text before the screenshot, as the docs recommend.
+        content.put(AgentJson.text(screenText(first)))
             .put(AgentJson.text(transcript))
+            .put(AgentJson.image(first.shot.jpeg))
         messages.put(AgentJson.user(content))
 
         repeat(turnCap(settings.claudeModel)) {
