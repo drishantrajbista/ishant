@@ -69,6 +69,14 @@ Setup has a **Voice recognition** setting with two engines.
     cuts you off; everything you said is joined when you let go.
   - The bubble buzzes when the recognizer is ready for you to start.
 
+Gemini's free tier has daily limits that Google no longer publishes, so Buddy copes at runtime. The default model is
+`gemini-flash-lite-latest` (the Flash-Lite models get the most free requests per day) and transcription always starts
+there. On a 429 Buddy reads Google's `QuotaFailure`/`RetryInfo` details: a per-minute limit with a retry delay of 15 s or
+less is waited out once ("busy, retrying in 13s"); anything else (per-day, limit 0, unknown) moves on to the next model
+(your model, Flash-Lite, then the other Flash-Lite and Flash models your key lists), remembering exhausted models until
+midnight Pacific. If every model is used up, voice switches to Phone until the next Pacific midnight and then back. A
+400 for an unsupported thinking setting only changes the thinking setting (remembered per model), never the model.
+
 Spoken replies containing Devanagari are read with a Nepali voice (Hindi if Nepali isn't installed).
 
 ## Architecture mapping

@@ -170,9 +170,12 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         val audio = clip.finish() ?: throw IOException(NOT_HEARD)
         if (settings.provider == Provider.GEMINI) return respond(shot.await(), Question(audio = audio))
         val transcript = try {
-            GeminiClient(settings).transcribe(audio)   // the screenshot is being taken meanwhile
+            GeminiClient(settings) { bubble?.setText(it) }.transcribe(audio)   // the screenshot is being taken meanwhile
         } catch (e: EmptyReplyException) {
             throw IOException(NOT_HEARD)
+        } catch (e: GeminiExhaustedException) {
+            settings.markGeminiVoiceOutToday()   // phone voice until the next Pacific midnight, then back to Gemini
+            throw SpokenException(VOICE_OUT_MESSAGE)
         }
         bubble?.setText("heard: ${transcript.take(100)}")
         answer(shot.await(), Question(transcript = transcript))
@@ -209,11 +212,13 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private suspend fun respond(shot: Screenshot, question: Question) {
         speaker.start()
         var heardLine: String? = null
-        fun show(text: String) =
-            bubble?.setText(listOfNotNull(heardLine, text.takeIf { it.isNotBlank() }).joinToString("\n\n").ifBlank { null })
+        var noticeLine: String? = null   // e.g. "busy, retrying in 13s" or "switched to ..." from the Gemini client
+        fun show(text: String) = bubble?.setText(
+            listOfNotNull(noticeLine, heardLine, text.takeIf { it.isNotBlank() }).joinToString("\n\n").ifBlank { null },
+        )
 
         val reply = conversation.ask(
-            settings.createProvider(), question, shot,
+            settings.createProvider { noticeLine = it; show("") }, question, shot,
             onHeard = { heardLine = "heard: ${it.take(100)}"; show("") },
             onText = { soFar ->
                 if (state != BuddyState.RESPONDING) setState(BuddyState.RESPONDING)
@@ -256,7 +261,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
                 block()
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: DeclinedException) {
+            } catch (e: SpokenException) {
                 say(e.message.orEmpty())
             } catch (e: Exception) {
                 speaker.stop()
@@ -376,6 +381,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         private const val EXTRA_DATA = "projection_data"
         private const val CHANNEL_ID = "buddy"
         private const val NOTIFICATION_ID = 1
+        private const val VOICE_OUT_MESSAGE = "gemini voice is out for today, switched to phone voice. please ask again."
         private const val CAPTURE_DELAY_MS = 150L
         private const val OVERLAY_VISIBLE_MS = 150L
         private const val GEMINI_URL = "https://generativelanguage.googleapis.com/"

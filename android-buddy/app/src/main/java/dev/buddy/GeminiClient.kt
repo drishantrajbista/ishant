@@ -8,11 +8,17 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.ConcurrentHashMap
 
-/** Google Gemini (free tier from AI Studio): streaming chat with a screenshot, plus audio transcription. */
-class GeminiClient(private val settings: Settings) : AiProvider {
-    private val model get() = settings.geminiModel.removePrefix("models/")
+/**
+ * Google Gemini (free tier from AI Studio): streaming chat with a screenshot, plus audio transcription. Requests go
+ * through [ModelFallback], which copes with thinking configs and free-tier limits; [notify] receives the short
+ * status lines it wants shown ("busy, retrying in 13s", "switched to ...") and null to clear them.
+ */
+class GeminiClient(
+    private val settings: Settings,
+    private val notify: (String?) -> Unit = {},
+) : AiProvider {
+    private fun fallback() = ModelFallback(settings, { cachedModels() }, notify)
 
     override fun stream(
         systemPrompt: String,
@@ -27,19 +33,18 @@ class GeminiClient(private val settings: Settings) : AiProvider {
         }
         val ask = question.audio?.let { inlineData("audio/aac", it) } ?: text(question.transcript.orEmpty())
         contents.put(content("user", inlineData("image/jpeg", screenshot.jpeg), text(screenLabel(screenshot)), ask))
-        val limitMessage = if (question.audio != null) VOICE_LIMIT_MESSAGE else RATE_LIMIT_MESSAGE
-        val model = this.model
+        val preferred = listOf(settings.geminiModel.removePrefix("models/"), LITE_LATEST)
 
         return flow {
             var emitted = false
             var finish: String? = null
             var blocked: String? = null
-            thinkingFallback(model, started = { emitted }) { thinking ->
+            fallback().run(preferred, started = { emitted }) { model, thinking ->
                 val body = JSONObject()
                     .put("systemInstruction", JSONObject().put("parts", JSONArray().put(text(systemPrompt))))
                     .put("contents", contents)
                     .put("generationConfig", config(2048, thinking))
-                sseData(request("streamGenerateContent", model, body, sse = true), limitMessage).collect { data ->
+                sseData(request("streamGenerateContent", model, body, sse = true)).collect { data ->
                     val chunk = parseChunk(JSONObject(data))
                     chunk.finish?.let { finish = it }
                     chunk.blocked?.let { blocked = it }
@@ -50,17 +55,22 @@ class GeminiClient(private val settings: Settings) : AiProvider {
         }
     }
 
-    /** One non-streaming call that turns an AAC clip into text, whatever language(s) it is in. */
+    /**
+     * One non-streaming call that turns an AAC clip into text, whatever language(s) it is in. Transcription doesn't
+     * need a big model, so it starts on the Flash-Lite alias whatever the answer model is.
+     */
     suspend fun transcribe(audio: ByteArray): String {
-        val model = this.model
         val contents = JSONArray().put(content("user", text(TRANSCRIBE_PROMPT), inlineData("audio/aac", audio)))
-        val chunk = parseChunk(thinkingFallback(model) { thinking ->
+        val json = fallback().run(listOf(LITE_LATEST)) { model, thinking ->
             val body = JSONObject().put("contents", contents).put("generationConfig", config(512, thinking))
-            httpJson(request("generateContent", model, body), VOICE_LIMIT_MESSAGE)
-        })
+            httpJson(request("generateContent", model, body))
+        }
+        val chunk = parseChunk(json)
         if (chunk.text.isBlank()) throw EmptyReplyException(chunk.blocked ?: chunk.finish)
         return chunk.text.trim()
     }
+
+    private suspend fun cachedModels(): List<String> = listed ?: listModels(settings.geminiKey).also { listed = it }
 
     private fun request(method: String, model: String, body: JSONObject, sse: Boolean = false) = Request.Builder()
         .url("$BASE/models/$model:$method" + if (sse) "?alt=sse" else "")
@@ -68,8 +78,8 @@ class GeminiClient(private val settings: Settings) : AiProvider {
         .post(body.toString().toRequestBody("application/json".toMediaType()))
         .build()
 
-    private fun config(maxOutputTokens: Int, thinking: JSONObject?) =
-        JSONObject().put("maxOutputTokens", maxOutputTokens).apply { thinking?.let { put("thinkingConfig", it) } }
+    private fun config(maxOutputTokens: Int, thinking: String?) =
+        JSONObject().put("maxOutputTokens", maxOutputTokens).apply { thinking?.let { put("thinkingConfig", JSONObject(it)) } }
 
     private fun content(role: String, vararg parts: JSONObject) = JSONObject().put("role", role).put("parts", JSONArray(parts.toList()))
     private fun text(t: String) = JSONObject().put("text", t)
@@ -91,35 +101,12 @@ class GeminiClient(private val settings: Settings) : AiProvider {
         return Chunk(text.toString(), candidate?.str("finishReason"), json.optJSONObject("promptFeedback")?.str("blockReason"))
     }
 
-    /**
-     * Thinking tokens count against maxOutputTokens and slow replies down, so try to switch thinking off. Models
-     * disagree on how: on HTTP 400 (before any text) fall back to the next variant. The one that works is remembered.
-     */
-    private suspend fun <T> thinkingFallback(
-        model: String,
-        started: () -> Boolean = { false },
-        attempt: suspend (JSONObject?) -> T,
-    ): T {
-        var variant = workingVariant[model] ?: 0
-        while (true) {
-            try {
-                return attempt(THINKING[variant]?.let(::JSONObject)).also { workingVariant[model] = variant }
-            } catch (e: ApiException) {
-                if (e.code != 400 || started() || variant >= THINKING.lastIndex) throw e
-                variant++
-            }
-        }
-    }
-
     companion object {
         private const val BASE = "https://generativelanguage.googleapis.com/v1beta"
-        const val RATE_LIMIT_MESSAGE = "free tier limit hit, try again in a minute"
-        const val VOICE_LIMIT_MESSAGE = "gemini voice limit hit, try again in a minute (or switch voice to Phone in settings)"
         private const val TRANSCRIBE_PROMPT = "Transcribe this audio exactly as spoken. The speaker may use any language or " +
             "mix languages; write each word in its own language and normal script. Output only the transcript, nothing else."
 
-        private val THINKING = listOf("""{"thinkingBudget":0}""", """{"thinkingLevel":"low"}""", null)
-        private val workingVariant = ConcurrentHashMap<String, Int>()
+        @Volatile private var listed: List<String>? = null
 
         /** Model ids (without the "models/" prefix) that support generateContent. */
         suspend fun listModels(apiKey: String): List<String> {

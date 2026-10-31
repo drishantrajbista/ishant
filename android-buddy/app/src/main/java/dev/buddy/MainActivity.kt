@@ -218,6 +218,10 @@ private fun SetupScreen(settings: Settings) {
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             )
             Text("The key is free and needs no card.", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "Free tier: Flash-Lite models give the most free requests per day.",
+                style = MaterialTheme.typography.bodySmall,
+            )
             TextButton(onClick = {
                 context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
             }) { Text("Get a key at aistudio.google.com/apikey") }
@@ -227,7 +231,7 @@ private fun SetupScreen(settings: Settings) {
             )
             OutlinedButton(onClick = {
                 scope.launch {
-                    try { fetched = GeminiClient.listModels(geminiKey) }
+                    try { fetched = pickerOrder(GeminiClient.listModels(geminiKey)) }
                     catch (e: Exception) { Toast.makeText(context, e.message ?: "Failed to fetch models", Toast.LENGTH_LONG).show() }
                 }
             }, modifier = Modifier.fillMaxWidth()) { Text("Fetch models") }
