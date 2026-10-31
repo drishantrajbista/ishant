@@ -1,8 +1,17 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+// Release signing: the key lives outside the repo; keystore.properties (gitignored) points at it. Without that file
+// (a fresh checkout) the build falls back to the default debug key.
+val keystoreProps = Properties().apply {
+    rootProject.file("keystore.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+val hasReleaseKey = keystoreProps.getProperty("storeFile") != null
 
 android {
     namespace = "dev.buddy"
@@ -12,8 +21,30 @@ android {
         applicationId = "dev.buddy"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.4.1"
+        versionCode = 10
+        versionName = "1.5"
+    }
+
+    signingConfigs {
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            isShrinkResources = false
+            isDebuggable = false
+            if (hasReleaseKey) signingConfig = signingConfigs.getByName("release")
+        }
+        debug {
+            if (hasReleaseKey) signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     compileOptions {

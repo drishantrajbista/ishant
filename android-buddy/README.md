@@ -165,7 +165,7 @@ Spoken replies containing Devanagari are read with a Nepali voice (Hindi if Nepa
 
 ## Setup
 
-1. Install the app (`release/buddy-debug.apk`, or build it below). It is signed with the standard Android debug key, so
+1. Install the app (`release/buddy-debug.apk`, or build it below). It is signed with a release key (see *Signing*), so
    a newer build installs over an older one.
 2. Open Buddy and pick a mode.
    - **Claude app:** install the Claude app and sign in. That's it.
@@ -176,6 +176,15 @@ Spoken replies containing Devanagari are read with a Nepali voice (Hindi if Nepa
 4. Grant **overlay** (draw over other apps), **microphone** and, on Android 13+, **notifications**.
 5. Tap **Start Buddy** and accept the screen-capture prompt. Hold the bubble to talk; drag it to move; tap it while it
    is working or speaking to stop. Stop Buddy from the app or the notification's Stop action.
+
+## Signing
+
+Builds are signed with a release key that is kept outside the repository (`keystore.properties` and `*.jks` are
+gitignored and never committed). Without `keystore.properties` a fresh checkout still builds, signed with the default
+debug key. Moving from the old debug-signed builds to this one needs a single uninstall and reinstall (Android won't
+update an app across different signing keys); after that, updates install over each other. To rebuild in a new session,
+restore the keystore from the copy you keep and recreate `keystore.properties` (`storeFile`, `storePassword`, `keyAlias`,
+`keyPassword`) next to `settings.gradle.kts`.
 
 ## Build
 
