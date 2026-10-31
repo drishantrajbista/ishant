@@ -391,7 +391,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     /** Fire-and-forget GETs so DNS and TLS are already done when the real request goes out. */
     private fun warmUp() {
         val urls = buildSet {
-            if (settings.provider == Provider.CLAUDE) add(settings.proxyUrl.ifBlank { CLAUDE_URL })
+            if (settings.provider == Provider.CLAUDE) add(CLAUDE_URL)
             if (settings.voiceEngine == VoiceEngine.GEMINI) add(GEMINI_URL)
         }
         for (url in urls) runCatching {

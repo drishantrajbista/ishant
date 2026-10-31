@@ -37,6 +37,11 @@ class Settings(context: Context) : QuotaStore {
     )
 
     init {
+        // 1.2.1: the proxy field is gone; a key pasted into it becomes the key. The field is always dropped.
+        prefs.getString("proxy_url", null)?.let { old ->
+            keyFromOldProxyField(old, claudeKey)?.let { claudeKey = it }
+            prefs.edit().remove("proxy_url").apply()
+        }
         // 1.1.1: the old default (regular Flash) only gets ~20 free requests a day; move people to Flash-Lite once.
         if (!prefs.getBoolean("model_default_migrated", false)) {
             if (str("gemini_model") == OLD_DEFAULT_GEMINI_MODEL) put("gemini_model", DEFAULT_GEMINI_MODEL)
@@ -76,13 +81,11 @@ class Settings(context: Context) : QuotaStore {
     var speechLanguage: String get() = str("speech_language"); set(v) = put("speech_language", v)
     var geminiKey: String get() = str("gemini_key"); set(v) = put("gemini_key", v)
     var geminiModel: String get() = str("gemini_model", DEFAULT_GEMINI_MODEL); set(v) = put("gemini_model", v)
-    var claudeKey: String get() = str("api_key"); set(v) = put("api_key", v)
+    var claudeKey: String get() = str("api_key"); set(v) = put("api_key", cleanKey(v))
     var claudeModel: String get() = str("model", CLAUDE_MODELS[0]); set(v) = put("model", v)
-    /** Claude API only; compatible with Clicky's worker (POST {proxy}/chat, no key header). */
-    var proxyUrl: String get() = str("proxy_url"); set(v) = put("proxy_url", v)
 
     val isConfigured: Boolean
-        get() = provider == Provider.CLAUDE_APP || claudeKey.isNotBlank() || proxyUrl.isNotBlank()
+        get() = provider == Provider.CLAUDE_APP || claudeKey.isNotBlank()
 
     /** Gemini voice needs a Gemini key whatever the mode is. */
     val voiceReady: Boolean get() = voiceEngine == VoiceEngine.PHONE || geminiKey.isNotBlank()

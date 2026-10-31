@@ -82,7 +82,6 @@ private fun SetupScreen(settings: Settings) {
     var geminiModel by remember { mutableStateOf(settings.geminiModel) }
     var claudeKey by remember { mutableStateOf(settings.claudeKey) }
     var claudeModel by remember { mutableStateOf(settings.claudeModel) }
-    var proxy by remember { mutableStateOf(settings.proxyUrl) }
     var drawTags by remember { mutableStateOf(settings.drawTags) }
     var fetched by remember { mutableStateOf<List<String>>(emptyList()) }
     var languageMenu by remember { mutableStateOf(false) }
@@ -167,17 +166,16 @@ private fun SetupScreen(settings: Settings) {
                         "with prepaid credit. Haiku 5.5 is the fastest and cheapest.",
                 )
                 OutlinedTextField(
-                    value = claudeKey, onValueChange = { claudeKey = it; settings.claudeKey = it },
+                    value = claudeKey, onValueChange = { claudeKey = cleanKey(it); settings.claudeKey = it },
                     label = { Text("Anthropic API key") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    isError = claudeKey.isNotEmpty() && !looksLikeClaudeKey(claudeKey),
+                    supportingText = {
+                        if (claudeKey.isNotEmpty() && !looksLikeClaudeKey(claudeKey)) {
+                            Text("this doesn't look like a Claude API key (starts with sk-ant-)")
+                        }
+                    },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                )
-                OutlinedTextField(
-                    value = proxy, onValueChange = { proxy = it; settings.proxyUrl = it },
-                    label = { Text("Proxy base URL (optional)") },
-                    supportingText = { Text("If set, requests go to {proxy}/chat with no key header.") },
-                    singleLine = true, modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 )
                 Text("Model", style = MaterialTheme.typography.titleSmall)
                 CLAUDE_MODELS.forEach { m ->
@@ -268,8 +266,8 @@ private fun SetupScreen(settings: Settings) {
         }
         Text(
             "Screenshots are only captured when you release the bubble. Claude app mode hands the screenshot to the " +
-                "Claude app on this phone (Buddy sends nothing itself). Claude API mode sends it to Anthropic (or your " +
-                "proxy). Gemini, if you pick it for voice, only receives your recording. " +
+                "Claude app on this phone (Buddy sends nothing itself). Claude API mode sends it to Anthropic. " +
+                "Gemini, if you pick it for voice, only receives your recording. " +
                 "Don't use Buddy on screens showing sensitive information unless you're happy with that.",
             style = MaterialTheme.typography.bodySmall,
         )

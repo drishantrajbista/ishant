@@ -15,7 +15,7 @@ Answers always come from Claude. Gemini is only an optional voice-to-text engine
 | Mode | What happens | You need | Cost |
 |---|---|---|---|
 | **Claude app (free)**, the default | Buddy opens the Claude app with your screenshot and question; you tap send, copy the answer and tap the bubble. Buddy speaks it and draws on your screen. | The Claude app, signed in | Your normal Claude account. No API key. |
-| **Claude API (pay per use)** | Buddy sends the screenshot and question to the Claude API in the background, speaks the reply as it streams, and draws. Haiku 5.5 by default, Sonnet 5.5 or Opus 5.5 optional. | An Anthropic API key with prepaid credit (or a Clicky-style `/chat` proxy) | Pay per use |
+| **Claude API (pay per use)** | Buddy sends the screenshot and question to the Claude API in the background, speaks the reply as it streams, and draws. Haiku 5.5 by default, Sonnet 5.5 or Opus 5.5 optional. | An Anthropic API key (starts with `sk-ant-`) with prepaid credit | Pay per use |
 
 ### How the Claude chat round trip works (Claude app mode)
 
@@ -111,7 +111,7 @@ Spoken replies containing Devanagari are read with a Nepali voice (Hindi if Nepa
 | Menu bar app, push-to-talk hotkey | Foreground service + draggable floating bubble (`WindowManager`, hold to talk) |
 | AssemblyAI streaming transcription | Gemini transcription of a Buddy recording, or `SpeechRecognizer` |
 | ScreenCaptureKit screenshots | One `MediaProjection` + `VirtualDisplay` + `ImageReader` kept for the service's lifetime |
-| Claude via Cloudflare Worker `/chat` | A hand-off to the Claude app (answer read back via clipboard/share), or `ClaudeClient` (direct or via a `/chat` proxy) |
+| Claude via Cloudflare Worker `/chat` | A hand-off to the Claude app (answer read back via clipboard/share), or `ClaudeClient` (straight to `api.anthropic.com`) |
 | `CompanionManager` state machine | `BuddyService` (idle / listening / processing / responding, plus "answer awaited") |
 | `[POINT:x,y:label]` + `parsePointingCoordinates` | Seven drawing tags + `parseAnswer` in `Answer.kt` |
 | Blue cursor overlay `NSPanel` | Full-screen non-touchable overlay window where the cursor flies and draws (`DrawingOverlay`) |
@@ -124,9 +124,8 @@ Spoken replies containing Devanagari are read with a Nepali voice (Hindi if Nepa
    a newer build installs over an older one.
 2. Open Buddy and pick a mode.
    - **Claude app:** install the Claude app and sign in. That's it.
-   - **Claude API:** paste an Anthropic API key from console.anthropic.com (prepaid credit required), or set a **proxy
-     base URL** (for example Clicky's Cloudflare Worker): requests then go to `{proxy}/chat` with no key header.
-     Pick Haiku 5.5 (default, fastest and cheapest), Sonnet 5.5 or Opus 5.5.
+   - **Claude API:** paste an Anthropic API key from console.anthropic.com (prepaid credit required; Buddy warns if it
+     doesn't start with `sk-ant-`). Pick Haiku 5.5 (default, fastest and cheapest), Sonnet 5.5 or Opus 5.5.
 3. Pick a voice recognition engine. For Gemini, get a free key at https://aistudio.google.com/apikey (no card); the
    model defaults to `gemini-flash-lite-latest` and **Fetch models** lists the ones your key can use, Flash-Lite first.
 4. Grant **overlay** (draw over other apps), **microphone** and, on Android 13+, **notifications**.
@@ -150,7 +149,7 @@ sideloading.
 - Screenshots are only captured when you release the bubble after push-to-talk. There is no analytics.
 - **Claude app mode:** Buddy sends nothing over the network itself. The screenshot goes to the Claude app on your phone,
   under your Claude account's own terms. Buddy reads the clipboard only when you tap the bubble to show an answer.
-- **Claude API mode:** the screenshot and your words go to Anthropic (or to your proxy).
+- **Claude API mode:** the screenshot and your words go to Anthropic.
 - **Gemini voice:** only your recording goes to Google (never the screenshot). On Gemini's free tier Google may use it
   to improve its products.
 - API keys are stored with `EncryptedSharedPreferences` on the device.

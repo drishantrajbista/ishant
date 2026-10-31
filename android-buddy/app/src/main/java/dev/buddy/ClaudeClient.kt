@@ -1,6 +1,7 @@
 package dev.buddy
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -9,7 +10,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 
-/** Anthropic Messages API with SSE streaming, directly or through a Clicky-style proxy. */
+/** Anthropic Messages API with SSE streaming. */
 class ClaudeClient(private val settings: Settings) {
     fun stream(
         systemPrompt: String,
@@ -35,8 +36,6 @@ class ClaudeClient(private val settings: Settings) {
             ),
         )
         val model = settings.claudeModel
-        val proxy = settings.proxyUrl.trimEnd('/')
-        val direct = proxy.isEmpty()
         // Thinking tokens count against max_tokens, so leave room; "low" effort keeps the thinking short.
         // (No thinking/temperature/top_p/top_k: thinking can't be switched off on Sonnet or Opus without a 400.)
         val body = JSONObject()
@@ -46,26 +45,24 @@ class ClaudeClient(private val settings: Settings) {
             .put("output_config", JSONObject().put("effort", "low"))
             .put("system", systemPrompt)
             .put("messages", messages)
-        // Server-side fallback: direct mode only (Clicky's worker doesn't forward beta headers), not on Haiku.
-        val serverFallback = direct && model in FALLBACK_MODELS
+        // Server-side fallback for Sonnet and Opus (Haiku 5.5 has none).
+        val serverFallback = model in FALLBACK_MODELS
         if (serverFallback) body.put("fallbacks", "default")
 
         val request = Request.Builder()
-            .url(if (direct) "https://api.anthropic.com/v1/messages" else "$proxy/chat")
+            .url("https://api.anthropic.com/v1/messages")
             .post(body.toString().toRequestBody("application/json".toMediaType()))
-            .apply {
-                if (direct) {
-                    header("x-api-key", settings.claudeKey)
-                    header("anthropic-version", "2023-06-01")
-                    if (serverFallback) header("anthropic-beta", "server-side-fallback-2026-07-01")
-                }
-            }
+            .header("x-api-key", settings.claudeKey)
+            .header("anthropic-version", "2023-06-01")
+            .apply { if (serverFallback) header("anthropic-beta", "server-side-fallback-2026-07-01") }
             .build()
 
         return flow {
             var emitted = false
             var stopReason: String? = null
-            sseData(request).collect { data ->
+            sseData(request).catch { e ->
+                throw if (e is ApiException) claudeErrorMessage(e.code, e.body)?.let { ApiException(e.code, it, e.body) } ?: e else e
+            }.collect { data ->
                 val json = JSONObject(data)
                 when (json.optString("type")) {
                     // Only text_delta is spoken; thinking_delta blocks are ignored.
