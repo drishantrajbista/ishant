@@ -3,7 +3,9 @@ package dev.buddy
 import android.annotation.SuppressLint
 import android.content.Context
 import android.animation.ValueAnimator
+import android.content.res.Configuration
 import android.graphics.Canvas
+import android.graphics.SweepGradient
 import android.graphics.LinearGradient
 import android.graphics.Shader
 import android.util.DisplayMetrics
@@ -26,9 +28,10 @@ import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.TextView
 import kotlin.math.hypot
+import kotlin.math.cos
 import kotlin.math.sin
 
-enum class BuddyState { IDLE, LISTENING, PROCESSING, RESPONDING }
+enum class BuddyState { IDLE, LISTENING, PROCESSING, RESPONDING, ACTING }
 
 fun overlayParams(w: Int, h: Int, touchable: Boolean) = WindowManager.LayoutParams(
     w, h,
@@ -60,14 +63,30 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
 
     private val bubble = BubbleView()
     private val bubbleParams = overlayParams(size, size, touchable = true)
+    private val darkMode = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+
+    /** The reply card: a rounded, softly shadowed card (the shadow is layered translucent shapes, inset so it isn't clipped). */
     private val textView = TextView(context).apply {
-        setTextColor(Color.WHITE)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        setTextColor(if (darkMode) Color.WHITE else Color.rgb(0x1C, 0x1C, 0x1E))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        setLineSpacing(dp(2f), 1f)
         maxLines = 10
         ellipsize = android.text.TextUtils.TruncateAt.END
-        val pad = dp(12f).toInt()
-        setPadding(pad, pad, pad, pad)
-        background = GradientDrawable().apply { setColor(0xE6202124.toInt()); cornerRadius = dp(16f) }
+        val inset = dp(10f).toInt()
+        val pad = inset + dp(14f).toInt()
+        setPadding(pad, pad - dp(2f).toInt(), pad, pad + dp(2f).toInt())
+        fun shape(color: Int, stroke: Boolean = false) = GradientDrawable().apply {
+            setColor(color); cornerRadius = dp(16f)
+            if (stroke) setStroke(dp(1f).toInt(), if (darkMode) Color.argb(50, 255, 255, 255) else Color.argb(28, 0, 0, 0))
+        }
+        val card = shape(if (darkMode) Color.argb(245, 28, 28, 30) else Color.argb(247, 255, 255, 255), stroke = true)
+        background = android.graphics.drawable.LayerDrawable(
+            arrayOf(shape(Color.argb(12, 0, 0, 0)), shape(Color.argb(16, 0, 0, 0)), shape(Color.argb(22, 0, 0, 0)), card),
+        ).also { l ->
+            l.setLayerInset(1, dp(2f).toInt(), dp(2f).toInt(), dp(2f).toInt(), dp(1f).toInt())
+            l.setLayerInset(2, dp(5f).toInt(), dp(5f).toInt(), dp(5f).toInt(), dp(3f).toInt())
+            l.setLayerInset(3, inset, dp(8f).toInt(), inset, dp(12f).toInt())
+        }
         visibility = View.GONE
     }
     private val textParams = overlayParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, false)
@@ -218,8 +237,15 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
     fun setText(text: String?) {
         if (!added) return
         textView.text = text.orEmpty()
-        textView.visibility = if (text.isNullOrBlank() || hiddenForCapture) View.GONE else View.VISIBLE
+        val show = !(text.isNullOrBlank() || hiddenForCapture)
+        val appearing = show && textView.visibility != View.VISIBLE
+        textView.visibility = if (show) View.VISIBLE else View.GONE
         positionText()
+        if (appearing) {   // fade and slide in
+            textView.alpha = 0f
+            textView.translationY = dp(10f)
+            textView.animate().alpha(1f).translationY(0f).setDuration(180).start()
+        }
     }
 
     /** Hides both windows so they are not in the screenshot. */
@@ -238,7 +264,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
     private fun positionText() {
         val m = context.resources.displayMetrics
         val margin = dp(8f).toInt()
-        textView.maxWidth = (m.widthPixels * 0.7f).toInt()
+        textView.maxWidth = minOf(dp(280f).toInt(), (m.widthPixels * 0.8f).toInt())
         textView.measure(
             View.MeasureSpec.makeMeasureSpec(m.widthPixels, View.MeasureSpec.AT_MOST),
             View.MeasureSpec.makeMeasureSpec(m.heightPixels / 2, View.MeasureSpec.AT_MOST),
@@ -255,12 +281,24 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         var level = 0f
         private var state = BuddyState.IDLE
         private var smoothLevel = 0f
-        private val blue = Color.rgb(59, 130, 246)
-        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = blue }
-        private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(90, 59, 130, 246) }
-        private val white = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
-        private val spinner = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = dp(3f); strokeCap = Paint.Cap.ROUND
+        // Frosted-glass look: a translucent circle with a soft shadow, a sheen and a thin border.
+        private val dark = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        private val accent = Color.rgb(0xD9, 0x77, 0x57)
+        private val glass = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if (dark) Color.argb(205, 28, 28, 30) else Color.argb(217, 255, 255, 255) }
+        private val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE; strokeWidth = dp(1f); color = if (dark) Color.argb(60, 255, 255, 255) else Color.argb(40, 0, 0, 0)
+        }
+        private val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(14, 0, 0, 0) }
+        private val accentFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent }
+        private val tick = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent; strokeWidth = dp(2.5f); strokeCap = Paint.Cap.ROUND }
+        private val pulse = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent; style = Paint.Style.STROKE; strokeWidth = dp(2f) }
+        private val arc = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = dp(3.5f); strokeCap = Paint.Cap.ROUND }
+
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            val cx = w / 2f; val cy = h / 2f; val r = dp(19f)
+            sheen.shader = LinearGradient(cx, cy - r, cx, cy + r, Color.argb(if (dark) 36 else 130, 255, 255, 255), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+            arc.shader = SweepGradient(cx, cy, intArrayOf(Color.TRANSPARENT, accent), null)
         }
         private val handler = Handler(Looper.getMainLooper())
         private val slop = ViewConfiguration.get(context).scaledTouchSlop
@@ -284,36 +322,62 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         fun setWaiting(w: Boolean) { waiting = w; invalidate() }
         fun stop() = handler.removeCallbacks(holdRunnable)
 
+        /** The Buddy mark: a small arrow-like cursor. */
+        private fun glyph(canvas: Canvas, cx: Float, cy: Float, r: Float, rotation: Float = 0f) {
+            canvas.save()
+            canvas.rotate(rotation, cx, cy)
+            canvas.drawPath(Path().apply {
+                moveTo(cx, cy - r * 0.5f); lineTo(cx + r * 0.42f, cy + r * 0.45f)
+                lineTo(cx, cy + r * 0.25f); lineTo(cx - r * 0.42f, cy + r * 0.45f); close()
+            }, accentFill)
+            canvas.restore()
+        }
+
         override fun onDraw(canvas: Canvas) {
             val cx = width / 2f; val cy = height / 2f
-            val r = dp(18f)
             val t = System.currentTimeMillis()
             smoothLevel += (level - smoothLevel) * 0.25f
-            if (state == BuddyState.LISTENING) {
-                val pulse = 0.08f * sin(t / 180.0).toFloat()
-                canvas.drawCircle(cx, cy, r * (1.2f + 0.55f * smoothLevel + pulse), ring)
-            }
-            canvas.drawCircle(cx, cy, r, fill)
+            val r = dp(19f) * if (state == BuddyState.IDLE) 1f + 0.035f * sin(t / 800.0).toFloat() else 1f   // idle: breathing
+            for (i in 3 downTo 1) canvas.drawCircle(cx, cy + dp(1.5f) * i, r + dp(1.2f) * i, shadow)
+            canvas.drawCircle(cx, cy, r, glass)
+            canvas.drawCircle(cx, cy, r, sheen)
+            canvas.drawCircle(cx, cy, r, border)
             when (state) {
-                BuddyState.PROCESSING -> canvas.drawArc(
-                    RectF(cx - r * 0.55f, cy - r * 0.55f, cx + r * 0.55f, cy + r * 0.55f),
-                    (t / 3 % 360).toFloat(), 260f, false, spinner,
-                )
-                BuddyState.RESPONDING -> for (i in -1..1) {
-                    val barH = r * (0.5f + 0.4f * sin(t / 140.0 + i * 1.6).toFloat())
-                    canvas.drawRoundRect(cx + i * dp(7f) - dp(2f), cy - barH / 2, cx + i * dp(7f) + dp(2f), cy + barH / 2, dp(2f), dp(2f), white)
+                BuddyState.IDLE -> glyph(canvas, cx, cy, r)
+                BuddyState.LISTENING -> {   // a waveform ring that follows the voice
+                    glyph(canvas, cx, cy, r)
+                    for (i in 0 until 28) {
+                        val a = i * 2 * Math.PI / 28
+                        val amp = 0.15f + 0.85f * smoothLevel * (0.5f + 0.5f * sin(t / 110.0 + i * 0.9).toFloat())
+                        val from = r + dp(2f); val to = from + dp(1f) + dp(5f) * amp
+                        canvas.drawLine(cx + from * cos(a).toFloat(), cy + from * sin(a).toFloat(), cx + to * cos(a).toFloat(), cy + to * sin(a).toFloat(), tick)
+                    }
                 }
-                else -> canvas.drawPath(Path().apply {
-                    moveTo(cx, cy - r * 0.5f); lineTo(cx + r * 0.42f, cy + r * 0.45f)
-                    lineTo(cx, cy + r * 0.25f); lineTo(cx - r * 0.42f, cy + r * 0.45f); close()
-                }, white)
+                BuddyState.PROCESSING -> {   // a rotating gradient arc
+                    glyph(canvas, cx, cy, r * 0.8f)
+                    canvas.save()
+                    canvas.rotate((t / 3 % 360).toFloat(), cx, cy)
+                    canvas.drawArc(RectF(cx - r - dp(4f), cy - r - dp(4f), cx + r + dp(4f), cy + r + dp(4f)), 0f, 300f, false, arc)
+                    canvas.restore()
+                }
+                BuddyState.RESPONDING -> {   // speaking: a ring that pulses outwards
+                    glyph(canvas, cx, cy, r)
+                    val phase = (t % 1100) / 1100f
+                    pulse.alpha = (200 * (1f - phase)).toInt()
+                    canvas.drawCircle(cx, cy, r + dp(7f) * phase, pulse)
+                }
+                BuddyState.ACTING -> {   // acting: a cursor glyph with a dot circling it
+                    glyph(canvas, cx, cy, r, -25f)
+                    val a = t / 350.0
+                    canvas.drawCircle(cx + (r + dp(5f)) * cos(a).toFloat(), cy + (r + dp(5f)) * sin(a).toFloat(), dp(2.5f), accentFill)
+                }
             }
             if (waiting) {
-                val r = dp(6f) * (1f + 0.25f * sin(t / 300.0).toFloat())
-                canvas.drawCircle(cx + dp(15f), cy - dp(15f), r, badge)
-                canvas.drawCircle(cx + dp(15f), cy - dp(15f), r, badgeEdge)
+                val br = dp(6f) * (1f + 0.25f * sin(t / 300.0).toFloat())
+                canvas.drawCircle(cx + dp(15f), cy - dp(15f), br, badge)
+                canvas.drawCircle(cx + dp(15f), cy - dp(15f), br, badgeEdge)
             }
-            if (state != BuddyState.IDLE || waiting) postInvalidateOnAnimation()
+            if (state != BuddyState.IDLE || waiting) postInvalidateOnAnimation() else postInvalidateDelayed(40)
         }
 
         override fun onTouchEvent(e: MotionEvent): Boolean {

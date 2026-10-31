@@ -14,43 +14,72 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -60,14 +89,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         val settings = Settings(this)
-        setContent {
-            val scheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
-            MaterialTheme(colorScheme = scheme) {
-                Surface(Modifier.fillMaxSize()) { SetupScreen(settings) }
-            }
-        }
+        setContent { BuddyTheme { Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) { BuddyApp(settings) } } }
     }
 }
+
+private fun Context.has(permission: String) =
+    ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
 /** Android 14+ can be told to offer whole-screen sharing only; older versions show the usual picker. */
 private fun screenCaptureIntent(context: Context): Intent {
@@ -76,240 +103,398 @@ private fun screenCaptureIntent(context: Context): Intent {
     else manager.createScreenCaptureIntent()
 }
 
-private fun Context.has(permission: String) =
-    ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+/** Everything the screens show and edit; each change is saved straight away. */
+private class AppState(private val context: Context, val settings: Settings) {
+    var provider by mutableStateOf(settings.provider)
+    var voiceChoice by mutableStateOf(settings.voiceChoice)
+    var speechLanguage by mutableStateOf(settings.speechLanguage)
+    var speechRate by mutableFloatStateOf(settings.speechRate)
+    var geminiKey by mutableStateOf(settings.geminiKey)
+    var geminiModel by mutableStateOf(settings.geminiModel)
+    var claudeKey by mutableStateOf(settings.claudeKey)
+    var claudeModel by mutableStateOf(settings.claudeModel)
+    var drawTags by mutableStateOf(settings.drawTags)
+    var fetched by mutableStateOf<List<String>>(emptyList())
+    var overlayOk by mutableStateOf(false)
+    var micOk by mutableStateOf(false)
+    var notifOk by mutableStateOf(false)
+    var a11yOn by mutableStateOf(false)
+    var claudeInstalled by mutableStateOf(false)
 
-@Composable
-private fun SetupScreen(settings: Settings) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var provider by remember { mutableStateOf(settings.provider) }
-    var voiceChoice by remember { mutableStateOf(settings.voiceChoice) }
-    var speechLanguage by remember { mutableStateOf(settings.speechLanguage) }
-    var geminiKey by remember { mutableStateOf(settings.geminiKey) }
-    var geminiModel by remember { mutableStateOf(settings.geminiModel) }
-    var claudeKey by remember { mutableStateOf(settings.claudeKey) }
-    var claudeModel by remember { mutableStateOf(settings.claudeModel) }
-    var drawTags by remember { mutableStateOf(settings.drawTags) }
-    var fetched by remember { mutableStateOf<List<String>>(emptyList()) }
-    var languageMenu by remember { mutableStateOf(false) }
-    var claudeInstalled by remember { mutableStateOf(context.isClaudeAppInstalled()) }
-    var a11yOn by remember { mutableStateOf(BuddyAccessibilityService.isEnabled(context)) }
-    var overlayOk by remember { mutableStateOf(AndroidSettings.canDrawOverlays(context)) }
-    var micOk by remember { mutableStateOf(context.has(Manifest.permission.RECORD_AUDIO)) }
-    var notifOk by remember {
-        mutableStateOf(Build.VERSION.SDK_INT < 33 || context.has(Manifest.permission.POST_NOTIFICATIONS))
-    }
-    val running by BuddyService.running.collectAsState()
+    val voice get() = voiceChoice ?: if (geminiKey.isNotBlank()) VoiceEngine.GEMINI else VoiceEngine.PHONE
 
-    // Gemini voice is the default as soon as a Gemini key is saved, unless the user picked an engine.
-    val voice = voiceChoice ?: if (geminiKey.isNotBlank()) VoiceEngine.GEMINI else VoiceEngine.PHONE
+    init { refresh() }
 
-    // Permissions can change while we're in system settings, so re-check on resume.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+    /** Permissions can change while the user is in system settings, so this runs on every resume. */
+    fun refresh() {
         overlayOk = AndroidSettings.canDrawOverlays(context)
         micOk = context.has(Manifest.permission.RECORD_AUDIO)
         notifOk = Build.VERSION.SDK_INT < 33 || context.has(Manifest.permission.POST_NOTIFICATIONS)
-        claudeInstalled = context.isClaudeAppInstalled()
         a11yOn = BuddyAccessibilityService.isEnabled(context)
+        claudeInstalled = context.isClaudeAppInstalled()
     }
 
-    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { micOk = it }
-    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { notifOk = it }
+    fun pick(p: Provider) { provider = p; settings.provider = p }
+    fun pick(v: VoiceEngine) { voiceChoice = v; settings.voiceChoice = v }
+    fun saveClaudeKey(raw: String) { claudeKey = cleanKey(raw); settings.claudeKey = raw }
+    fun saveGeminiKey(raw: String) { geminiKey = raw; settings.geminiKey = raw }
+    fun saveClaudeModel(m: String) { claudeModel = m; settings.claudeModel = m }
+    fun saveGeminiModel(m: String) { geminiModel = m; settings.geminiModel = m }
+    fun setLanguage(tag: String) { speechLanguage = tag; settings.speechLanguage = tag }
+    fun setDraw(on: Boolean) { drawTags = on; settings.drawTags = on }
+}
+
+private class Actions(
+    val start: () -> Unit,
+    val stop: () -> Unit,
+    val grantOverlay: () -> Unit,
+    val grantMic: () -> Unit,
+    val grantNotifications: () -> Unit,
+    val openAccessibility: () -> Unit,
+)
+
+@Composable
+private fun BuddyApp(settings: Settings) {
+    val context = LocalContext.current
+    val state = remember { AppState(context, settings) }
+    val running by BuddyService.running.collectAsState()
+    var onboarding by remember { mutableStateOf(!settings.onboarded) }
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { state.refresh() }
+
+    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { state.micOk = it }
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { state.notifOk = it }
     val projectionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         val data = r.data
-        if (r.resultCode == android.app.Activity.RESULT_OK && data != null) {
-            BuddyService.start(context, r.resultCode, data)
-        }
+        if (r.resultCode == android.app.Activity.RESULT_OK && data != null) BuddyService.start(context, r.resultCode, data)
     }
 
-    fun start() {
-        val problem = when {
-            !settings.isConfigured -> "Enter an API key first"
-            !settings.voiceReady -> "Enter a Gemini API key, or switch voice recognition to Phone"
-            !overlayOk -> "Grant the overlay permission first"
-            !micOk -> "Grant the microphone permission first"
-            else -> null
-        }
-        if (problem != null) Toast.makeText(context, problem, Toast.LENGTH_SHORT).show()
-        else if (Build.VERSION.SDK_INT >= 30 && BuddyAccessibilityService.instance != null) BuddyService.start(context)
-        else projectionLauncher.launch(screenCaptureIntent(context))
-    }
-
-    @Composable
-    fun chip(label: String, selected: Boolean, onClick: () -> Unit) =
-        FilterChip(selected = selected, onClick = onClick, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
-
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Text("Buddy", style = MaterialTheme.typography.headlineMedium)
-        Text("Hold the floating bubble, ask a question about your screen, and let go. Claude answers, and Buddy can point and draw on your screen.")
-
-        // --- Mode ---
-        Text("Mode", style = MaterialTheme.typography.titleSmall)
-        chip("Claude app (free)", provider == Provider.CLAUDE_APP) { provider = Provider.CLAUDE_APP; settings.provider = provider }
-        chip("Claude API (pay per use)", provider == Provider.CLAUDE) { provider = Provider.CLAUDE; settings.provider = provider }
-
-        when (provider) {
-            Provider.CLAUDE_APP -> {
-                Text(
-                    "Uses the Claude app on this phone with your normal Claude account. No API key, no extra cost. " +
-                        "Buddy opens Claude with your screenshot and question; you tap send. Then tap copy under Claude's " +
-                        "answer and tap the bubble: Buddy reads it aloud and draws on your screen.",
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Ask Claude to point and draw", modifier = Modifier.weight(1f))
-                    Switch(checked = drawTags, onCheckedChange = { drawTags = it; settings.drawTags = it })
-                }
-                if (!claudeInstalled) {
-                    OutlinedButton(onClick = { context.openClaudeInPlayStore() }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Get the Claude app")
-                    }
-                }
+    val actions = Actions(
+        start = {
+            val problem = when {
+                !settings.isConfigured -> "Enter your Claude API key first"
+                !settings.voiceReady -> "Enter a Gemini API key, or switch voice recognition to Phone"
+                !state.overlayOk -> "Allow drawing over other apps first"
+                !state.micOk -> "Allow the microphone first"
+                else -> null
             }
-            Provider.CLAUDE -> {
-                Text(
-                    "Runs in the background with spoken answers and pointing. Needs an API key from console.anthropic.com " +
-                        "with prepaid credit. Haiku 5.5 is the fastest and cheapest.",
-                )
-                OutlinedTextField(
-                    value = claudeKey, onValueChange = { claudeKey = cleanKey(it); settings.claudeKey = it },
-                    label = { Text("Anthropic API key") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                    isError = claudeKey.isNotEmpty() && !looksLikeClaudeKey(claudeKey),
-                    supportingText = {
-                        if (claudeKey.isNotEmpty() && !looksLikeClaudeKey(claudeKey)) {
-                            Text("this doesn't look like a Claude API key (starts with sk-ant-)")
+            when {
+                problem != null -> Toast.makeText(context, problem, Toast.LENGTH_SHORT).show()
+                Build.VERSION.SDK_INT >= 30 && BuddyAccessibilityService.instance != null -> BuddyService.start(context)
+                else -> projectionLauncher.launch(screenCaptureIntent(context))
+            }
+        },
+        stop = { BuddyService.stop(context) },
+        grantOverlay = {
+            context.startActivity(Intent(AndroidSettings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
+        },
+        grantMic = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+        grantNotifications = { if (Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
+        openAccessibility = { context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS)) },
+    )
+
+    if (onboarding) Onboarding(state, actions) { settings.onboarded = true; onboarding = false }
+    else Home(state, actions, running)
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Shared pieces
+
+@Composable
+private fun ApiKeyField(state: AppState) {
+    val bad = state.claudeKey.isNotEmpty() && !looksLikeClaudeKey(state.claudeKey)
+    OutlinedTextField(
+        value = state.claudeKey, onValueChange = state::saveClaudeKey,
+        label = { Text("Anthropic API key") }, singleLine = true, isError = bad,
+        supportingText = { if (bad) Text("this doesn't look like a Claude API key (starts with sk-ant-)") else Text("From console.anthropic.com, with prepaid credit.") },
+        visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+    )
+}
+
+@Composable
+private fun accessibilityRowSubtitle(on: Boolean) = if (on) "On: Claude can tap, type and scroll when you ask" else "Off"
+
+@Composable
+private fun RestrictedSettingsHelp() = Note(
+    "On Android 13+, if the Buddy toggle is greyed out: Settings → Apps → Buddy → ⋮ (top right) → Allow restricted settings, " +
+        "then try again.",
+)
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Onboarding
+
+@Composable
+private fun Onboarding(state: AppState, actions: Actions, finish: () -> Unit) {
+    val pager = rememberPagerState { 4 }
+    val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+    fun next() { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp)) {
+        HorizontalPager(pager, Modifier.weight(1f)) { page ->
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                when (page) {
+                    0 -> {
+                        Spacer(Modifier.height(40.dp))
+                        LargeTitle("Meet Buddy")
+                        Text("Claude, floating over your phone.", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(24.dp))
+                        Group {
+                            SettingRow("Hold the bubble and ask", "Talk about whatever is on your screen", Icons.Default.Call)
+                            RowDivider()
+                            SettingRow("Claude answers", "Spoken aloud, with circles and arrows drawn on your screen", Icons.Default.Star)
+                            RowDivider()
+                            SettingRow("Let Claude do it", "With Claude API, it can tap, type and open apps for you", Icons.Default.Build)
                         }
-                    },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                )
-                Text("Model", style = MaterialTheme.typography.titleSmall)
-                Text("Haiku 5.5: fastest. Sonnet 5.5: smarter for long multi-app tasks.", style = MaterialTheme.typography.bodySmall)
-                CLAUDE_MODELS.forEach { m ->
-                    chip(claudeModelLabel(m), claudeModel == m) { claudeModel = m; settings.claudeModel = m }
-                }
-            }
-        }
-
-        // --- Voice recognition ---
-        Text("Voice recognition", style = MaterialTheme.typography.titleSmall)
-        chip("Gemini (most accurate)", voice == VoiceEngine.GEMINI) {
-            voiceChoice = VoiceEngine.GEMINI; settings.voiceChoice = VoiceEngine.GEMINI
-        }
-        chip("Phone (Google speech)", voice == VoiceEngine.PHONE) {
-            voiceChoice = VoiceEngine.PHONE; settings.voiceChoice = VoiceEngine.PHONE
-        }
-        if (voice == VoiceEngine.GEMINI) {
-            Text(
-                "Gemini voice sends your recording to Google; on the free tier Google may use it to improve its products.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        } else {
-            Box {
-                OutlinedButton(onClick = { languageMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Speech language: ${SPEECH_LANGUAGES.firstOrNull { it.first == speechLanguage }?.second ?: speechLanguage}")
-                }
-                DropdownMenu(expanded = languageMenu, onDismissRequest = { languageMenu = false }) {
-                    SPEECH_LANGUAGES.forEach { (tag, label) ->
-                        DropdownMenuItem(
-                            text = { Text(label) },
-                            onClick = { speechLanguage = tag; settings.speechLanguage = tag; languageMenu = false },
-                        )
+                    }
+                    1 -> {
+                        LargeTitle("Choose the brain")
+                        Group {
+                            SettingRow("Claude app", "Free. Uses the Claude app you're signed in to.", onClick = { state.pick(Provider.CLAUDE_APP) }) {
+                                if (state.provider == Provider.CLAUDE_APP) CheckMark()
+                            }
+                            RowDivider()
+                            SettingRow("Claude API", "Fast. Claude can control the phone. Pay per use.", onClick = { state.pick(Provider.CLAUDE) }) {
+                                if (state.provider == Provider.CLAUDE) CheckMark()
+                            }
+                            if (state.provider == Provider.CLAUDE) { RowDivider(); ApiKeyField(state) }
+                            if (state.provider == Provider.CLAUDE_APP && !state.claudeInstalled) {
+                                val context = LocalContext.current
+                                RowDivider()
+                                SettingRow("Get the Claude app", "It isn't installed yet", onClick = { context.openClaudeInPlayStore() }) { Chevron() }
+                            }
+                        }
+                    }
+                    2 -> {
+                        LargeTitle("Allow a few things")
+                        Group {
+                            PermissionRow("Draw over other apps", "Shows the bubble", Icons.Default.Home, state.overlayOk, actions.grantOverlay)
+                            RowDivider()
+                            PermissionRow("Microphone", "Hears your question", Icons.Default.Call, state.micOk, actions.grantMic)
+                            RowDivider()
+                            PermissionRow("Notifications", "Lets you stop Buddy from the shade", Icons.Default.Notifications, state.notifOk, actions.grantNotifications)
+                            RowDivider()
+                            SettingRow("Accessibility", "Optional: lets Claude control the phone", Icons.Default.Settings, onClick = actions.openAccessibility) {
+                                if (state.a11yOn) CheckMark(Green) else Chevron()
+                            }
+                        }
+                        if (Build.VERSION.SDK_INT >= 33 && !state.a11yOn) RestrictedSettingsHelp()
+                    }
+                    else -> {
+                        Spacer(Modifier.height(40.dp))
+                        LargeTitle("You're ready")
+                        Text("Hold the floating bubble, speak, and let go.", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(32.dp))
+                        StartButton(false, "Ready", actions) {}
                     }
                 }
             }
         }
+        Dots(pager.currentPage, 4)
+        Spacer(Modifier.height(16.dp))
+        if (pager.currentPage < 3) PrimaryButton("Continue") { next() }
+        else PrimaryButton("Start Buddy") { haptic.performHapticFeedback(HapticFeedbackType.LongPress); actions.start(); finish() }
+    }
+}
 
-        // --- Gemini key: Gemini only turns your voice into text ---
-        if (voice == VoiceEngine.GEMINI) {
-            Text("Gemini", style = MaterialTheme.typography.titleSmall)
-            OutlinedTextField(
-                value = geminiKey, onValueChange = { geminiKey = it; settings.geminiKey = it },
-                label = { Text("Gemini API key") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            )
-            Text("The key is free and needs no card.", style = MaterialTheme.typography.bodySmall)
-            Text(
-                "Free tier: Flash-Lite models give the most free requests per day.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            TextButton(onClick = {
-                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
-            }) { Text("Get a key at aistudio.google.com/apikey") }
-            OutlinedTextField(
-                value = geminiModel, onValueChange = { geminiModel = it; settings.geminiModel = it },
-                label = { Text("Model") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedButton(onClick = {
-                scope.launch {
-                    try { fetched = pickerOrder(GeminiClient.listModels(geminiKey)) }
-                    catch (e: Exception) { Toast.makeText(context, e.message ?: "Failed to fetch models", Toast.LENGTH_LONG).show() }
+@Composable
+private fun Dots(current: Int, count: Int) {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            repeat(count) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(if (it == current) Accent else MaterialTheme.colorScheme.outline))
+            }
+        }
+    }
+}
+
+/** The big round Start/Stop button with the live status underneath. */
+@Composable
+private fun StartButton(running: Boolean, status: String, actions: Actions, onClick: () -> Unit = { if (running) actions.stop() else actions.start() }) {
+    val haptic = LocalHapticFeedback.current
+    val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
+        1f, if (running) 1.05f else 1f, infiniteRepeatable(tween(1200), RepeatMode.Reverse), label = "scale",
+    )
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier.size(168.dp).scale(pulse).clip(CircleShape)
+                .background(if (running) Accent else MaterialTheme.colorScheme.surface)
+                .clickable { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onClick() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(if (running) "Stop" else "Start", fontSize = 28.sp, fontWeight = FontWeight.SemiBold, color = if (running) Color.White else Accent)
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(status, fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Home
+
+@Composable
+private fun Home(state: AppState, actions: Actions, running: Boolean) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+    val live by BuddyService.live.collectAsState()
+    var languageMenu by remember { mutableStateOf(false) }
+    fun tick() = haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
+        LargeTitle("Buddy")
+        Spacer(Modifier.height(12.dp))
+        StartButton(running, if (running) live else "Tap to start", actions)
+
+        // --- Brain ---
+        SectionLabel("Brain")
+        Group {
+            SettingRow("Claude app", "Free. Opens the Claude app; you copy the answer back.", Icons.Default.Star, onClick = { tick(); state.pick(Provider.CLAUDE_APP) }) {
+                if (state.provider == Provider.CLAUDE_APP) CheckMark()
+            }
+            RowDivider()
+            SettingRow("Claude API", "Pay per use. Runs in the background and can control the phone.", Icons.Default.Build, onClick = { tick(); state.pick(Provider.CLAUDE) }) {
+                if (state.provider == Provider.CLAUDE) CheckMark()
+            }
+            if (state.provider == Provider.CLAUDE_APP) {
+                RowDivider()
+                SettingRow("Ask Claude to point and draw", "Adds the drawing instructions to your question") {
+                    Switch(state.drawTags, { tick(); state.setDraw(it) }, colors = SwitchDefaults.colors(checkedTrackColor = Accent))
                 }
-            }, modifier = Modifier.fillMaxWidth()) { Text("Fetch models") }
-            fetched.forEach { m ->
-                TextButton(onClick = { geminiModel = m; settings.geminiModel = m }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (m == geminiModel) "$m (selected)" else m)
+                if (!state.claudeInstalled) {
+                    RowDivider()
+                    SettingRow("Get the Claude app", "Claude app mode needs it", onClick = { context.openClaudeInPlayStore() }) { Chevron() }
+                }
+            } else {
+                RowDivider()
+                ApiKeyField(state)
+                CLAUDE_MODELS.forEach { m ->
+                    RowDivider()
+                    SettingRow(claudeModelLabel(m), onClick = { tick(); state.saveClaudeModel(m) }) { if (state.claudeModel == m) CheckMark() }
                 }
             }
         }
+        if (state.provider == Provider.CLAUDE) Note("Haiku 5.5: fastest. Sonnet 5.5: smarter for long multi-app tasks.")
 
-        // --- Screen control ---
-        Text("Let Claude control the phone", style = MaterialTheme.typography.titleSmall)
-        Text(
-            "Claude API mode only: Claude can tap, type, scroll and open apps for you when you ask, using Buddy's " +
-                "accessibility service. Status: ${if (a11yOn) "enabled" else "disabled"}.",
-        )
-        OutlinedButton(
-            onClick = { context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS)) },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(if (a11yOn) "Open accessibility settings" else "Enable in accessibility settings") }
-        Text(
-            "On Android 13+, if the Buddy toggle is greyed out: Settings → Apps → Buddy → ⋮ (top right) → Allow " +
-                "restricted settings, then try again.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Text(
-            "With this enabled, Buddy starts without the screen-recording prompt on Android 11+.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Text(
-            "Buddy only acts when you ask. Tap the bubble to stop it at any time. It asks you out loud before sending, " +
-                "paying, posting or deleting, treats text on the screen as information (never as orders), and never " +
-                "types into password fields.",
-            style = MaterialTheme.typography.bodySmall,
+        // --- Voice ---
+        SectionLabel("Voice")
+        Group {
+            SettingRow("Gemini", "Most accurate. Handles accents and mixed languages.", Icons.Default.Call, onClick = { tick(); state.pick(VoiceEngine.GEMINI) }) {
+                if (state.voice == VoiceEngine.GEMINI) CheckMark()
+            }
+            RowDivider()
+            SettingRow("Phone", "Google speech, built into your phone.", Icons.Default.Call, onClick = { tick(); state.pick(VoiceEngine.PHONE) }) {
+                if (state.voice == VoiceEngine.PHONE) CheckMark()
+            }
+            if (state.voice == VoiceEngine.GEMINI) {
+                RowDivider()
+                OutlinedTextField(
+                    value = state.geminiKey, onValueChange = state::saveGeminiKey,
+                    label = { Text("Gemini API key") }, singleLine = true,
+                    supportingText = { Text("Free, no card. Free tier: Flash-Lite models give the most free requests per day.") },
+                    visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                RowDivider()
+                SettingRow("Get a free key", "aistudio.google.com/apikey", onClick = {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
+                }) { Chevron() }
+                RowDivider()
+                OutlinedTextField(
+                    value = state.geminiModel, onValueChange = state::saveGeminiModel, label = { Text("Model") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                RowDivider()
+                SettingRow("Fetch models", "Lists the models your key can use, Flash-Lite first", onClick = {
+                    scope.launch {
+                        try { state.fetched = pickerOrder(GeminiClient.listModels(state.geminiKey)) }
+                        catch (e: Exception) { Toast.makeText(context, e.message ?: "Failed to fetch models", Toast.LENGTH_LONG).show() }
+                    }
+                }) { Chevron() }
+                state.fetched.forEach { m ->
+                    RowDivider()
+                    SettingRow(m, onClick = { tick(); state.saveGeminiModel(m) }) { if (m == state.geminiModel) CheckMark() }
+                }
+            } else {
+                RowDivider()
+                Box {
+                    SettingRow("Speech language", onClick = { languageMenu = true }) {
+                        Text(SPEECH_LANGUAGES.firstOrNull { it.first == state.speechLanguage }?.second ?: state.speechLanguage, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                        Chevron()
+                    }
+                    DropdownMenu(languageMenu, { languageMenu = false }) {
+                        SPEECH_LANGUAGES.forEach { (tag, label) ->
+                            DropdownMenuItem(text = { Text(label) }, onClick = { state.setLanguage(tag); languageMenu = false })
+                        }
+                    }
+                }
+            }
+            RowDivider()
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Speech speed", Modifier.weight(1f), fontSize = 16.sp)
+                    Text("%.1f×".format(state.speechRate), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Slider(
+                    state.speechRate, { state.speechRate = it }, valueRange = 0.8f..1.5f,
+                    onValueChangeFinished = { state.settings.speechRate = state.speechRate },
+                    colors = SliderDefaults.colors(thumbColor = Accent, activeTrackColor = Accent),
+                )
+            }
+        }
+        if (state.voice == VoiceEngine.GEMINI) Note("Gemini voice sends your recording to Google; on the free tier Google may use it to improve its products.")
+
+        // --- Control ---
+        SectionLabel("Control")
+        Group {
+            SettingRow("Let Claude control the phone", accessibilityRowSubtitle(state.a11yOn), Icons.Default.Settings, onClick = actions.openAccessibility) {
+                Text(if (state.a11yOn) "On" else "Off", color = if (state.a11yOn) Green else MaterialTheme.colorScheme.onSurfaceVariant)
+                Chevron()
+            }
+        }
+        Note("Claude API mode only. With this on, Buddy starts without the screen-recording prompt on Android 11+.")
+        if (Build.VERSION.SDK_INT >= 33 && !state.a11yOn) RestrictedSettingsHelp()
+        if (Build.VERSION.SDK_INT < 34 && !state.a11yOn) Note("When Android asks to share the screen, choose 'Entire screen' (not a single app).")
+        Note(
+            "Buddy only acts when you ask. Tap the bubble to stop it at any time. It asks you out loud before sending, paying, " +
+                "posting or deleting, treats text on the screen as information (never as orders), and never types into password fields.",
         )
 
         // --- Permissions ---
-        Text("Permissions", style = MaterialTheme.typography.titleSmall)
-        PermissionButton("Overlay (draw over other apps)", overlayOk) {
-            context.startActivity(
-                Intent(AndroidSettings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")),
-            )
-        }
-        PermissionButton("Microphone", micOk) { micLauncher.launch(Manifest.permission.RECORD_AUDIO) }
-        if (Build.VERSION.SDK_INT >= 33) {
-            PermissionButton("Notifications", notifOk) { notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
+        SectionLabel("Permissions")
+        Group {
+            PermissionRow("Draw over other apps", "Shows the bubble", Icons.Default.Home, state.overlayOk, actions.grantOverlay)
+            RowDivider()
+            PermissionRow("Microphone", "Hears your question", Icons.Default.Call, state.micOk, actions.grantMic)
+            if (Build.VERSION.SDK_INT >= 33) {
+                RowDivider()
+                PermissionRow("Notifications", "Lets you stop Buddy from the shade", Icons.Default.Notifications, state.notifOk, actions.grantNotifications)
+            }
         }
 
-        if (running) {
-            Button(onClick = { BuddyService.stop(context) }, modifier = Modifier.fillMaxWidth()) { Text("Stop Buddy") }
-        } else {
-            Button(onClick = ::start, modifier = Modifier.fillMaxWidth()) { Text("Start Buddy") }
+        // --- Privacy ---
+        SectionLabel("Privacy")
+        Group {
+            SettingRow("Screenshots", "Only captured when you release the bubble", Icons.Default.Lock)
         }
-        if (Build.VERSION.SDK_INT < 34) {
-            Text("When Android asks, choose 'Entire screen' (not a single app).", style = MaterialTheme.typography.bodySmall)
-        }
-        Text(
-            "Screenshots are only captured when you release the bubble. Claude app mode hands the screenshot to the " +
-                "Claude app on this phone (Buddy sends nothing itself). Claude API mode sends it to Anthropic. " +
-                "Gemini, if you pick it for voice, only receives your recording. " +
-                "Don't use Buddy on screens showing sensitive information unless you're happy with that.",
-            style = MaterialTheme.typography.bodySmall,
+        Note(
+            "Claude app mode hands the screenshot to the Claude app on this phone (Buddy sends nothing itself). Claude API mode " +
+                "sends it to Anthropic. Gemini, if you pick it for voice, only receives your recording. Don't use Buddy on screens " +
+                "showing sensitive information unless you're happy with that.",
         )
+
+        // --- About ---
+        SectionLabel("About")
+        Group {
+            val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty() }
+            SettingRow("Version", icon = Icons.Default.Info) { Text(version, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            RowDivider()
+            SettingRow("Based on Clicky by Farza (MIT)", "github.com/farzaa/clicky", onClick = {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/farzaa/clicky")))
+            }) { Chevron() }
+        }
+        Spacer(Modifier.height(32.dp))
     }
 }
 
@@ -318,11 +503,4 @@ private fun claudeModelLabel(id: String) = when (id) {
     "claude-sonnet-5-5" -> "Sonnet 5.5"
     "claude-opus-5-5" -> "Opus 5.5"
     else -> id
-}
-
-@Composable
-private fun PermissionButton(label: String, granted: Boolean, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, enabled = !granted, modifier = Modifier.fillMaxWidth()) {
-        Text(if (granted) "$label: granted" else "Grant $label")
-    }
 }

@@ -11,7 +11,7 @@ import java.util.Locale
  * Speaks a reply. [onFinished] fires on the main thread once everything queued has been spoken. Text containing
  * Devanagari is read with a Nepali (or Hindi) voice.
  */
-class Speaker(context: Context, private val onFinished: () -> Unit) {
+class Speaker(context: Context, private val rate: () -> Float, private val onFinished: () -> Unit) {
     private val main = Handler(Looper.getMainLooper())
     private var tts: TextToSpeech? = null
     private var ready = false
@@ -63,6 +63,7 @@ class Speaker(context: Context, private val onFinished: () -> Unit) {
         if (!ready) return
         for (piece in stripMarkdown(removeTags(text)).chunked(TextToSpeech.getMaxSpeechInputLength() - 1)) {
             useVoiceFor(engine, piece)
+            engine.setSpeechRate(rate())
             val id = "buddy-${utterances++}"
             if (engine.speak(piece, TextToSpeech.QUEUE_ADD, null, id) == TextToSpeech.SUCCESS) live.add(id)
         }

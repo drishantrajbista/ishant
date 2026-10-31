@@ -8,6 +8,19 @@ the things it is talking about.
 Credit: the idea, the casual spoken-style system prompt and the pointing contract come from Clicky (MIT,
 https://github.com/farzaa/clicky). This is an independent Android re-implementation.
 
+## The app
+
+A clean, minimal, grouped-card UI that follows the system light/dark setting (accent `#D97757`). First launch is a short
+swipeable onboarding: welcome, choose the brain (Claude app, or Claude API with an inline key field and a validity hint),
+a live permissions checklist (draw over apps, microphone, notifications, accessibility; the "Allow restricted settings"
+help only shows when it's relevant), and a big Start button. The home screen has a big round Start/Stop button with a
+live status ("Listening…", "Thinking…", "Doing: opening YouTube") and grouped sections: Brain, Voice (engine, language,
+speech speed 0.8x to 1.5x), Control, Permissions, Privacy and About.
+
+The floating bubble is a frosted-glass circle (translucent, soft shadow, thin border) that breathes when idle, shows a
+waveform ring while listening, a rotating gradient arc while thinking, a pulse while speaking and a small cursor glyph
+while acting, and springs to the nearest screen edge when you let go. Replies appear on a rounded, softly shadowed card.
+
 ## Modes
 
 Answers always come from Claude. Gemini is only an optional voice-to-text engine (see *Voice recognition*).

@@ -78,6 +78,15 @@ class Settings(context: Context) : QuotaStore {
         get() = str("draw_tags", "1") == "1"
         set(v) = put("draw_tags", if (v) "1" else "0")
 
+    var onboarded: Boolean
+        get() = str("onboarded") == "1"
+        set(v) = put("onboarded", if (v) "1" else "0")
+
+    /** How fast replies are spoken, 0.8x to 1.5x. */
+    var speechRate: Float
+        get() = str("speech_rate", "1.0").toFloatOrNull()?.coerceIn(0.8f, 1.5f) ?: 1f
+        set(v) = put("speech_rate", v.coerceIn(0.8f, 1.5f).toString())
+
     var speechLanguage: String get() = str("speech_language"); set(v) = put("speech_language", v)
     var geminiKey: String get() = str("gemini_key"); set(v) = put("gemini_key", v)
     var geminiModel: String get() = str("gemini_model", DEFAULT_GEMINI_MODEL); set(v) = put("gemini_model", v)

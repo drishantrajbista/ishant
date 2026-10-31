@@ -114,7 +114,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         control = PhoneControl(this, stage)
         drawing = DrawingOverlay(this).also { it.show() }
         bubble = BubbleOverlay(this, this).also { it.show() }
-        speaker = Speaker(this) { finishSpeaking() }
+        speaker = Speaker(this, { settings.speechRate }) { finishSpeaking() }
         phone = PhoneListener(this, this)
         ready = true
         running.value = true
@@ -175,7 +175,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     override fun onTap() {
         when {
             // Stop everything: the request, the speech, the drawing.
-            state == BuddyState.PROCESSING || state == BuddyState.RESPONDING -> { cancelWork(); finishSpeaking() }
+            state != BuddyState.IDLE && state != BuddyState.LISTENING -> { cancelWork(); finishSpeaking() }
             drawing?.hasContent == true -> drawing?.clear()
             handoff != null -> showWaitingAnswer()
             // Claude app mode, nothing waiting: share just the screenshot.
@@ -232,7 +232,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
 
     /** Claude API mode: let Claude look, tap, type and scroll until the request is done, then speak its answer. */
     private suspend fun act(obs: Observation, transcript: String) {
-        val text = agent.run(transcript, obs, control) { bubble?.setText(it) }
+        val text = agent.run(transcript, obs, control, this::agentStatus)
         drawing?.clear()
         present(text, control.map)
     }
@@ -281,7 +281,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private val stage = object : Stage {
         override suspend fun frame(): Bitmap = hiddenCapture { fullFrame() }
         override suspend fun glide(x: Float, y: Float) { drawing?.glideTo(PointF(x, y), bubble!!.center()) }
-        override fun status(text: String) { bubble?.setText(text) }
+        override fun status(text: String) = agentStatus(text)
         override fun bubbleTouchable(on: Boolean) { bubble?.setTouchable(on) }
     }
 
@@ -415,8 +415,21 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         setState(BuddyState.IDLE)
     }
 
+    /** What the agent is doing right now: shown in the bubble and on the home screen. */
+    private fun agentStatus(text: String) {
+        if (text == "thinking") { setState(BuddyState.PROCESSING); bubble?.setText("thinking…") }
+        else { setState(BuddyState.ACTING); live.value = "Doing: $text"; bubble?.setText(text) }
+    }
+
     private fun setState(s: BuddyState) {
         state = s
+        live.value = when (s) {
+            BuddyState.IDLE -> "Ready"
+            BuddyState.LISTENING -> "Listening…"
+            BuddyState.PROCESSING -> "Thinking…"
+            BuddyState.RESPONDING -> "Speaking…"
+            BuddyState.ACTING -> live.value
+        }
         bubble?.setState(s)
         if (s != BuddyState.LISTENING) bubble?.setLevel(0f)
     }
@@ -519,6 +532,9 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         private const val CLAUDE_URL = "https://api.anthropic.com/"
 
         val running = MutableStateFlow(false)
+
+        /** A short live status for the home screen ("Listening…", "Doing: opening YouTube"). */
+        val live = MutableStateFlow("Ready")
 
         /** [data] is the screen-recording consent; not needed when the accessibility service provides screenshots. */
         fun start(context: Context, resultCode: Int = 0, data: Intent? = null) {
