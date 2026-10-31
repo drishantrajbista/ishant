@@ -599,7 +599,7 @@ private fun Home(state: AppState, actions: Actions, running: Boolean, openTransc
             // --- Capabilities ---
             SectionHeader("Capabilities")
             GroupCard {
-                SettingRow("Conversation mode", "After Buddy answers out loud it listens a few seconds for a follow-up. Tap the bubble to end it.", Icons.Default.Call, Tint.Brand) {
+                SettingRow("Conversation mode", "Keep listening a few seconds after an answer for a follow-up. Off = Buddy listens only while you hold the bubble.", Icons.Default.Call, Tint.Brand) {
                     MinimalSwitch(state.conversation) { state.saveConversation(it) }
                 }
                 Hairline()

@@ -21,6 +21,8 @@ sealed class LocalCommand {
     object Briefing : LocalCommand()
     /** "take a screenshot": saved to the gallery. */
     object SaveScreenshot : LocalCommand()
+    /** "copy that": the last answer (or the text it wrote) onto the clipboard. */
+    object CopyLast : LocalCommand()
 }
 
 /** "7:30 am" for an alarm's hour and minute (24-hour in). */
@@ -68,6 +70,9 @@ private val MEDIA_PHRASES = mapOf(
 
 // "take a screenshot", "screenshot", "save a screenshot"; Nepali "screenshot khich" / "screenshot le"
 private val SCREENSHOT = Regex("^(?:(?:take|save|capture|grab) (?:a |the |my )?)?screen ?shot(?: (?:khich|khichdeu|khichnu|le|linu|gara|garnu|deu|dinu))?$")
+
+// "copy that", "copy it", "copy the text"; Nepali "copy gara". Writing requests ("write a message", "message gara") are not here: they go to Claude.
+private val COPY_LAST = Regex("^(?:copy (?:that|it|this|that text|this text|the text|the reply|the answer)|(?:(?:tyo|yo) )?copy (?:gara|garnu|gardeu|garideu))$")
 
 private val FILLER_START = Regex("^((hey )?buddy )?((can|could|would|will) you )?(please )?(kindly )?")
 private val FILLER_END = Regex(" (please|for me|now)$")
@@ -141,6 +146,7 @@ fun routeLocal(transcript: String, labels: () -> List<String>): LocalCommand? {
     if (t == "quieter") return LocalCommand.Volume("down")
 
     if (SCREENSHOT.matches(t)) return LocalCommand.SaveScreenshot
+    if (COPY_LAST.matches(t)) return LocalCommand.CopyLast
     if (Regex("^(whats|what s|what is) my day$|^good morning$|^what did i miss$|^(my |daily )?briefing$|^give me (my |a |the )?(daily )?briefing$|^brief me$").matches(t)) {
         return LocalCommand.Briefing
     }

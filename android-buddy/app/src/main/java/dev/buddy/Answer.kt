@@ -51,18 +51,29 @@ fun scaleFor(w: Int, h: Int, maxEdge: Int, maxPixels: Int = Int.MAX_VALUE): Floa
 /** Asks Claude to reason before it answers (the Claude app has no system prompt of ours); it continues "...then answer to the point...". */
 private const val THINK_CLAUSE = "think it through carefully (what i really want, what you see vs what you assume), then answer"
 
+/** Write-and-copy for the Claude app (AGENT_PROMPT has the same rule): the written text goes in [COPY]...[/COPY] and Buddy puts it on the clipboard. */
+internal const val WRITE_CLAUSE = "if i ask you to write some text for me (a note, a caption, a reply, an email, any text), or to write, text, " +
+    "message or send a message to someone, write just the words to use, in the language and tone i want, and put exactly that text inside " +
+    "[COPY]...[/COPY] at the end of your reply (the text can be as long as it needs; no name label, no \"message:\", no quotes, no explanation), " +
+    "then say in one short sentence that it's copied and ready to paste"
+
+private val WRITE_WORDS = setOf("write", "draft", "compose", "caption", "reply", "message", "msg", "text", "email", "mail", "lekha", "lekh", "likh", "lekhdeu", "sandesh")
+
+/** True if a question looks like it asks for some text to be written (so the hand-off carries [WRITE_CLAUSE] even without the drawing tags). */
+fun looksLikeWriteRequest(question: String): Boolean = normalizeCommand(question).split(' ').any { it in WRITE_WORDS }
+
 /** The text that goes to the Claude app with the screenshot (and to the clipboard). */
 fun handoffText(question: String, w: Int, h: Int, draw: Boolean, recent: String = "", cropped: Boolean = false): String {
     val context = if (recent.isBlank()) "" else "\n\n[buddy: $recent]"
-    if (cropped) return "$question$context\n\n[buddy: the image is a cropped part of my screen. $THINK_CLAUSE to the point in one short sentence in english, no markdown.]"
-    return question + context + handoffTags(w, h, draw)
+    if (cropped) return "$question$context\n\n[buddy: the image is a cropped part of my screen. $THINK_CLAUSE to the point in one short sentence in english, no markdown. $WRITE_CLAUSE.]"
+    return question + context + when {
+        draw -> "\n\n[buddy: my screenshot is ${w}x$h px. $THINK_CLAUSE to the point in one short sentence in english (more only if i ask), no markdown. " +
+            "$WRITE_CLAUSE. to show me on screen add tags in screenshot pixels: [POINT:x,y:label] [CIRCLE:x,y,r] [BOX:x1,y1,x2,y2] " +
+            "[ARROW:x1,y1,x2,y2] [LINE:x1,y1,x2,y2] [PATH:x1,y1,x2,y2,...] [TEXT:x,y:words]]"
+        looksLikeWriteRequest(question) -> "\n\n[buddy: $WRITE_CLAUSE.]"
+        else -> ""   // drawing tags off: just the question
+    }
 }
-
-private fun handoffTags(w: Int, h: Int, draw: Boolean): String =
-    if (!draw) ""
-    else "\n\n[buddy: my screenshot is ${w}x$h px. $THINK_CLAUSE to the point in one short sentence in english (more only if i ask), no markdown. " +
-        "to show me on screen add tags in screenshot pixels: [POINT:x,y:label] [CIRCLE:x,y,r] [BOX:x1,y1,x2,y2] " +
-        "[ARROW:x1,y1,x2,y2] [LINE:x1,y1,x2,y2] [PATH:x1,y1,x2,y2,...] [TEXT:x,y:words]]"
 
 /** True if the clipboard holds nothing new: it's empty, or still the question/prefilled text we copied ourselves. */
 fun isOwnText(clip: String, copied: String?, question: String?): Boolean {
@@ -126,3 +137,69 @@ fun stripMarkdown(text: String): String = text
     .replace(Regex("""(?<=\S)\*+|\*+(?=\S)"""), "")
     .replace(Regex("""\s+"""), " ")
     .trim()
+
+// region write and copy
+
+/** What [parseCopy] found: [text] is the reply with the [COPY] markers removed, [copy] the first block's content (null if none, or if the markers are malformed). */
+class CopyParse(val text: String, val copy: String?)
+
+private val COPY_OPEN = Regex("""\[\s*copy\s*]""", RegexOption.IGNORE_CASE)
+private val COPY_CLOSE = Regex("""\[\s*/\s*copy\s*]""", RegexOption.IGNORE_CASE)
+private val COPY_BLOCK = Regex("""\[\s*copy\s*](.*?)\[\s*/\s*copy\s*]""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+private val COPY_MARK = Regex("""\[\s*/?\s*copy\s*]""", RegexOption.IGNORE_CASE)
+
+/**
+ * Finds the text a reply wants on the clipboard: `[COPY]...[/COPY]`, any case, spaces and newlines allowed in and around the
+ * markers. The content (trimmed, with surrounding quotes removed) is [CopyParse.copy]; nothing is copied if the markers
+ * don't pair up or the content is empty. Either way the markers leave [CopyParse.text], but the content stays in it: the
+ * written text is shown and spoken so the user can check it.
+ */
+fun parseCopy(raw: String): CopyParse {
+    val balanced = COPY_OPEN.findAll(raw).count() == COPY_CLOSE.findAll(raw).count()
+    val copy = if (balanced) COPY_BLOCK.find(raw)?.groupValues?.get(1)?.let(::cleanCopy)?.takeIf { it.isNotEmpty() } else null
+    val text = COPY_MARK.replace(raw, " ")
+        .replace("\r\n", "\n")
+        .replace(Regex("""[ \t]*\n[ \t]*"""), "\n")
+        .replace(Regex("""\n{3,}"""), "\n\n")
+        .replace(Regex("""[ \t]{2,}"""), " ")
+        .trim()
+    return CopyParse(text, copy)
+}
+
+private val DOUBLE_QUOTES = setOf('"', '\u201C', '\u201D', '\u201E', '\u00AB', '\u00BB')
+private val SINGLE_QUOTES = setOf('\'', '\u2018', '\u2019', '\u201A')
+private val QUOTE_AT_WORD_EDGE = Regex("""(^|\s)['\u2018\u2019\u201A]|['\u2018\u2019\u201A](\s|$)""")
+
+/** [text] trimmed, without a pair of quotes around the whole of it (not when the quotes are part of the text, like `"yes" and "no"`). */
+fun trimQuotes(text: String): String {
+    val t = text.trim()
+    if (t.length < 2) return t
+    val inner = t.substring(1, t.length - 1)
+    val a = t.first(); val b = t.last()
+    return when {
+        a in DOUBLE_QUOTES && b in DOUBLE_QUOTES && inner.none { it in DOUBLE_QUOTES } -> inner.trim()
+        a in SINGLE_QUOTES && b in SINGLE_QUOTES && !QUOTE_AT_WORD_EDGE.containsMatchIn(inner) -> inner.trim()   // apostrophes inside words are fine
+        a == '`' && b == '`' && '`' !in inner -> inner.trim()
+        else -> t
+    }
+}
+
+private fun cleanCopy(content: String) = trimQuotes(content.replace("\r\n", "\n"))
+
+/** A reply as shown and spoken ([spoken]: no tags, markers or markdown), the drawing it asks for, and the text for the clipboard. */
+class ReadReply(val spoken: String, val shapes: List<Shape>, val copy: String?)
+
+/** Everything in a Claude answer: [COPY] block, drawing tags and markdown, in that order of removal. */
+fun readReply(raw: String): ReadReply {
+    val c = parseCopy(raw)
+    val a = parseAnswer(c.text)
+    return ReadReply(stripMarkdown(a.spoken), a.shapes, c.copy)
+}
+
+/** The last reply on screen: what was displayed, and the text it asked to be copied, if any. */
+class Reply(val display: String, val copy: String?)
+
+/** What "copy that" and the card's Copy button put on the clipboard: the written text if the reply had a [COPY] block, else the whole reply. */
+fun copyTarget(reply: Reply?): String? = reply?.let { it.copy ?: it.display }?.takeIf { it.isNotBlank() }
+
+// endregion

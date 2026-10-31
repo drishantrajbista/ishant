@@ -5,13 +5,13 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import kotlinx.coroutines.delay
 import java.io.File
 import kotlin.math.sqrt
 
 /**
  * One push-to-talk clip recorded by Buddy itself (for Gemini voice): AAC, 16 kHz mono, about 32 kbps, so the
- * upload stays small. Single-use: [start], then [finish] (keeps the last word) or [discard].
+ * upload stays small. Single-use: [start] when the hold is confirmed, then [finish] or [discard], which close the
+ * microphone at once (no tail), so the system's microphone indicator clears the moment the finger lifts.
  */
 class VoiceRecording(
     private val context: Context,
@@ -58,13 +58,8 @@ class VoiceRecording(
         return true
     }
 
-    /** Keeps recording a moment longer so the last word isn't clipped, then returns the clip (null if empty). */
-    suspend fun finish(): ByteArray? = try {
-        delay(TAIL_MS)
-        stop()
-    } finally {
-        stop()  // only does anything if we were cancelled during the tail
-    }
+    /** Stops recording now and returns the clip (null if empty). */
+    fun finish(): ByteArray? = stop()
 
     fun discard() { stop() }
 
@@ -82,7 +77,6 @@ class VoiceRecording(
 
     private companion object {
         const val MAX_MS = 60_000
-        const val TAIL_MS = 300L
         const val LEVEL_POLL_MS = 50L
         const val MIN_BYTES = 1000
     }

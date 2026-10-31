@@ -75,6 +75,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         val shotW: Int, val shotH: Int, val displayW: Int, val displayH: Int,
         val question: String?, val copied: String?,
     )
+    private var lastReply: Reply? = null                      // the last answer shown: what the card's Copy button and "copy that" copy
     private var sessionRecent: List<Exchange> = emptyList()   // the last few exchanges, kept in memory even if the transcript is off
     private var pendingCrop: Screenshot? = null               // a cropped screenshot waiting for the next question
     private var pendingCropAt = 0L
@@ -180,10 +181,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     override fun onTouchDown() {
         if (followUp.isOpen) endFollowUp()   // touching the bubble ends the follow-up window
         warmUp()   // DNS and TLS are done by the time the question is ready
-        if (settings.voiceEngine != VoiceEngine.GEMINI) return
-        // Gemini voice records from the first instant so the first word isn't clipped; a tap or drag discards it.
-        recording?.discard()
-        recording = VoiceRecording(this, { bubble?.setLevel(it) }, { onPressEnd() }).takeIf { it.start() }
+        // The microphone stays closed until the hold is confirmed (onPressStart): a tap or a drag never opens it.
     }
 
     override fun onTouchAbort() { discardRecording() }
@@ -205,9 +203,11 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         cancelWork()
         bubble?.setText(null)
         when (settings.voiceEngine) {
-            VoiceEngine.GEMINI -> when {
-                settings.geminiKey.isBlank() -> return fail("add a gemini key in buddy's settings, or switch voice to phone")
-                recording == null -> return fail("couldn't open the microphone")
+            VoiceEngine.GEMINI -> {
+                if (settings.geminiKey.isBlank()) return fail("add a gemini key in buddy's settings, or switch voice to phone")
+                recording?.discard()
+                recording = VoiceRecording(this, { bubble?.setLevel(it) }, { onPressEnd() }).takeIf { it.start() }
+                    ?: return fail("couldn't open the microphone")
             }
             VoiceEngine.PHONE -> if (!phone.start(settings.speechLanguage)) {
                 return fail("speech recognition isn't available on this phone")
@@ -241,7 +241,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
 
     /** After a spoken answer: listen ~6 s for a follow-up without the bubble being held. Silence or a tap ends it. */
     private fun openFollowUp() {
-        if (!settings.conversationMode || state != BuddyState.IDLE || followUp.isOpen) return
+        if (!canOpenFollowUp(settings.conversationMode, state, followUp.isOpen)) return
         followUp.open()
         setState(BuddyState.LISTENING)
         bubble?.setText("go ahead…")
@@ -369,7 +369,8 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         TimingLog.record("total", SystemClock.elapsedRealtime() - pressEndAt, "local")
         replyEligible = settings.conversationMode
         record(transcript, text, "local")
-        say(text)
+        lastReply = Reply(text, null)
+        say(text, copyable = true)
     }
 
     /** What phone this is plus, if "Learn from me" is on, the notes Buddy has saved (both stay on the phone until sent to Claude). */
@@ -386,7 +387,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
 
     // region transcript and follow-up context
 
-    private fun spokenOf(raw: String) = stripMarkdown(parseAnswer(raw).spoken)
+    private fun spokenOf(raw: String) = readReply(raw).spoken
 
     /** Saves one exchange: in memory for follow-up context, and in the on-device transcript if "Keep transcript" is on. */
     private fun record(user: String, reply: String, mode: String) {
@@ -468,8 +469,9 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             ?: return false
         if (command is LocalCommand.Briefing) { speakBriefing(t0, transcript); return true }
         if (command is LocalCommand.SaveScreenshot) { saveScreenshotCommand(t0, transcript); return true }
+        if (command is LocalCommand.CopyLast) { copyLastCommand(t0, transcript); return true }
         val done = when (command) {
-            is LocalCommand.Briefing, is LocalCommand.SaveScreenshot -> null
+            is LocalCommand.Briefing, is LocalCommand.SaveScreenshot, is LocalCommand.CopyLast -> null
             is LocalCommand.Alarm -> try { setAlarm(command.hour, command.minute, null); "alarm set for ${clockText(command.hour, command.minute)}" } catch (e: ToolError) { null }
             is LocalCommand.Timer -> try { setTimer(command.seconds, null); "timer set for ${durationText(command.seconds)}" } catch (e: ToolError) { null }
             is LocalCommand.Media -> if (mediaKey(command.action)) "media ${command.action}" else null
@@ -581,6 +583,26 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         return SAVED_TO_GALLERY
     }
 
+    /** "Copy that": the last answer's [COPY] text, else the whole answer, onto the clipboard. No Claude call. */
+    private fun copyLastCommand(t0: Long, transcript: String) {
+        val text = copyTarget(lastReply)
+        val done = when {
+            text == null -> "nothing to copy yet"
+            copyToClipboard(text) -> "copied"
+            else -> "couldn't copy"
+        }
+        record(transcript, done, "local")
+        TimingLog.record("local", SystemClock.elapsedRealtime() - t0, "copy")
+        TimingLog.record("total", SystemClock.elapsedRealtime() - pressEndAt, "local")
+        if (done == "copied") bubble?.buzz()
+        showMessage(done, 1500)
+    }
+
+    /** The card's Copy button: the same text "copy that" copies. */
+    override fun onCopyReply() {
+        copyTarget(lastReply)?.let { copyWithToast(it) }
+    }
+
     /** "Take a screenshot": no Claude call; if it can't be done the reason is spoken. */
     private suspend fun saveScreenshotCommand(t0: Long, transcript: String) {
         val done = try {
@@ -649,14 +671,17 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
 
     /** Speaks Claude's answer (tags and markdown removed), shows it, and draws what it asked for. */
     private fun present(raw: String, map: ScreenMap?) {
-        val answer = parseAnswer(raw)
-        var spoken = stripMarkdown(answer.spoken)
-        if (answer.shapes.isNotEmpty() && map != null) {
+        val reply = readReply(raw)
+        var spoken = reply.spoken
+        // Written text (a [COPY] block) goes straight to the clipboard; the text itself is still shown and spoken to check.
+        reply.copy?.let { copyWithToast(it) }
+        if (reply.shapes.isNotEmpty() && map != null) {
             val (w, h) = displaySize()
-            if (map.matches(w, h)) drawing?.play(answer.shapes.map { map.toDisplay(it) }, bubble!!.center())
+            if (map.matches(w, h)) drawing?.play(reply.shapes.map { map.toDisplay(it) }, bubble!!.center())
             else spoken = "$spoken the screen rotated since then, so i can't draw on it.".trim()
         }
-        if (spoken.isBlank()) showMessage("no answer came back") else say(spoken)
+        lastReply = Reply(spoken, reply.copy)
+        if (spoken.isBlank()) showMessage("no answer came back") else say(spoken, copyable = true)
     }
 
     private fun startWaiting() {
@@ -720,10 +745,10 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private fun fail(message: String) { discardRecording(); showMessage(message) }
 
     /** Shows and speaks a short canned message. */
-    private fun say(text: String) {
+    private fun say(text: String, copyable: Boolean = false) {
         speaker.start()
         setState(BuddyState.RESPONDING)
-        bubble?.setText(text)
+        bubble?.setText(text, copyable)   // a finished answer gets a Copy button on its card
         speaker.end(text)
     }
 

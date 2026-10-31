@@ -6,6 +6,7 @@ import android.animation.ValueAnimator
 import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.SweepGradient
+import android.graphics.Typeface
 import android.graphics.LinearGradient
 import android.graphics.Shader
 import android.util.DisplayMetrics
@@ -26,6 +27,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.hypot
 import kotlin.math.cos
@@ -57,6 +59,8 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         /** The bubble was dropped on the close target. */
         fun onClose()
         fun onTap()
+        /** The "Copy" button on a finished reply was tapped. */
+        fun onCopyReply()
     }
 
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -67,13 +71,32 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
     private val bubbleParams = overlayParams(size, size, touchable = true)
     private val darkMode = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
-    /** The reply card: a rounded, softly shadowed card (the shadow is layered translucent shapes, inset so it isn't clipped). */
-    private val textView = TextView(context).apply {
+    /** The reply text inside the card. */
+    private val replyText = TextView(context).apply {
         setTextColor(if (darkMode) Color.WHITE else Color.rgb(0x1C, 0x1C, 0x1E))
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
         setLineSpacing(dp(2f), 1f)
         maxLines = 10
         ellipsize = android.text.TextUtils.TruncateAt.END
+    }
+
+    /** "Copy" at the bottom of the card. Shown (and the card made touchable) only for a finished reply, never for status text. */
+    private val copyButton = TextView(context).apply {
+        text = "Copy"
+        setTextColor(Color.rgb(0xD9, 0x77, 0x57))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        typeface = Typeface.DEFAULT_BOLD
+        contentDescription = "Copy the reply"
+        gravity = Gravity.CENTER_VERTICAL or Gravity.END
+        minHeight = dp(36f).toInt()
+        setPadding(dp(20f).toInt(), 0, 0, 0)
+        visibility = View.GONE
+        setOnClickListener { callbacks.onCopyReply() }
+    }
+
+    /** The reply card: a rounded, softly shadowed card (the shadow is layered translucent shapes, inset so it isn't clipped). */
+    private val card = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
         val inset = dp(10f).toInt()
         val pad = inset + dp(14f).toInt()
         setPadding(pad, pad - dp(2f).toInt(), pad, pad + dp(2f).toInt())
@@ -81,14 +104,16 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
             setColor(color); cornerRadius = dp(20f)
             if (stroke) setStroke(dp(1f).toInt(), if (darkMode) Color.argb(50, 255, 255, 255) else Color.argb(28, 0, 0, 0))
         }
-        val card = shape(if (darkMode) Color.argb(245, 28, 28, 30) else Color.argb(247, 255, 255, 255), stroke = true)
+        val face = shape(if (darkMode) Color.argb(245, 28, 28, 30) else Color.argb(247, 255, 255, 255), stroke = true)
         background = android.graphics.drawable.LayerDrawable(
-            arrayOf(shape(Color.argb(12, 0, 0, 0)), shape(Color.argb(16, 0, 0, 0)), shape(Color.argb(22, 0, 0, 0)), card),
+            arrayOf(shape(Color.argb(12, 0, 0, 0)), shape(Color.argb(16, 0, 0, 0)), shape(Color.argb(22, 0, 0, 0)), face),
         ).also { l ->
             l.setLayerInset(1, dp(2f).toInt(), dp(2f).toInt(), dp(2f).toInt(), dp(1f).toInt())
             l.setLayerInset(2, dp(5f).toInt(), dp(5f).toInt(), dp(5f).toInt(), dp(3f).toInt())
             l.setLayerInset(3, inset, dp(8f).toInt(), inset, dp(12f).toInt())
         }
+        addView(replyText, LinearLayout.LayoutParams(-2, -2))
+        addView(copyButton, LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.END })
         visibility = View.GONE
     }
     private val textParams = overlayParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, false)
@@ -104,12 +129,12 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         bubbleParams.x = m.widthPixels - size - dp(8f).toInt()
         bubbleParams.y = (m.heightPixels * 0.4f).toInt()
         return try {
-            wm.addView(textView, textParams)
+            wm.addView(card, textParams)
             wm.addView(bubble, bubbleParams)
             added = true
             true
         } catch (e: RuntimeException) {   // BadTokenException, SecurityException, IllegalStateException
-            runCatching { wm.removeView(textView) }
+            runCatching { wm.removeView(card) }
             false
         }
     }
@@ -221,7 +246,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         if (closeView.isAttachedToWindow) guard { wm.removeView(closeView) }
         bubble.stop()
         guard { wm.removeView(bubble) }
-        guard { wm.removeView(textView) }
+        guard { wm.removeView(card) }
     }
 
     fun setState(state: BuddyState) = bubble.setState(state)
@@ -245,18 +270,25 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
     /** Claude's answer is expected: a small pulsing Claude-orange badge. */
     fun setWaiting(waiting: Boolean) = bubble.setWaiting(waiting)
 
-    /** Shows [text] in the small bubble next to the floating bubble; null hides it. */
-    fun setText(text: String?) {
+    /**
+     * Shows [text] in the small bubble next to the floating bubble; null hides it. With [copyable] (a finished reply) the card
+     * gets a "Copy" button and takes touches; status text never does, so a gesture aimed under it still reaches the app.
+     */
+    fun setText(text: String?, copyable: Boolean = false) {
         if (!added) return
-        textView.text = text.orEmpty()
+        replyText.text = text.orEmpty()
+        val canCopy = copyable && !text.isNullOrBlank()
+        copyButton.visibility = if (canCopy) View.VISIBLE else View.GONE
+        textParams.flags = if (canCopy) textParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        else textParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         val show = !(text.isNullOrBlank() || hiddenForCapture)
-        val appearing = show && textView.visibility != View.VISIBLE
-        textView.visibility = if (show) View.VISIBLE else View.GONE
+        val appearing = show && card.visibility != View.VISIBLE
+        card.visibility = if (show) View.VISIBLE else View.GONE
         positionText()
         if (appearing) {   // fade and slide in
-            textView.alpha = 0f
-            textView.translationY = dp(10f)
-            textView.animate().alpha(1f).translationY(0f).setDuration(260).setInterpolator(OvershootInterpolator(0.9f)).start()
+            card.alpha = 0f
+            card.translationY = dp(10f)
+            card.animate().alpha(1f).translationY(0f).setDuration(260).setInterpolator(OvershootInterpolator(0.9f)).start()
         }
     }
 
@@ -264,7 +296,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
     fun setHiddenForCapture(hidden: Boolean) {
         hiddenForCapture = hidden
         bubble.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
-        textView.visibility = if (hidden || textView.text.isNullOrBlank()) View.GONE else View.VISIBLE
+        card.visibility = if (hidden || replyText.text.isNullOrBlank()) View.GONE else View.VISIBLE
     }
 
     /** Centre of the bubble in screen pixels. */
@@ -276,16 +308,16 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
     private fun positionText() {
         val m = context.resources.displayMetrics
         val margin = dp(8f).toInt()
-        textView.maxWidth = minOf(dp(300f).toInt(), (m.widthPixels * 0.85f).toInt())
-        textView.measure(
+        replyText.maxWidth = (minOf(dp(300f).toInt(), (m.widthPixels * 0.85f).toInt()) - card.paddingLeft - card.paddingRight).coerceAtLeast(dp(80f).toInt())
+        card.measure(
             View.MeasureSpec.makeMeasureSpec(m.widthPixels, View.MeasureSpec.AT_MOST),
             View.MeasureSpec.makeMeasureSpec(m.heightPixels / 2, View.MeasureSpec.AT_MOST),
         )
-        val w = textView.measuredWidth
-        val h = textView.measuredHeight
+        val w = card.measuredWidth
+        val h = card.measuredHeight
         textParams.x = (bubbleParams.x + size / 2 - w / 2).coerceIn(margin, (m.widthPixels - w - margin).coerceAtLeast(margin))
         textParams.y = (bubbleParams.y - h - margin).let { if (it < margin) bubbleParams.y + size + margin else it }
-        runCatching { wm.updateViewLayout(textView, textParams) }
+        runCatching { wm.updateViewLayout(card, textParams) }
     }
 
     @SuppressLint("ViewConstructor")

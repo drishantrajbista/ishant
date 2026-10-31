@@ -97,9 +97,13 @@ class Settings(context: Context) : QuotaStore {
         get() = str("speech_rate", "1.0").toFloatOrNull()?.coerceIn(0.8f, 1.5f) ?: 1f
         set(v) = put("speech_rate", v.coerceIn(0.8f, 1.5f).toString())
 
-    /** After a spoken answer, listen a few seconds for a follow-up without the bubble being held. */
+    /**
+     * After a spoken answer, listen a few seconds for a follow-up without the bubble being held. Off unless the user switched it
+     * on: an install that never touched the switch (it was on by default before) now has no stored value, so it reads as off,
+     * while a choice the user made is kept.
+     */
     var conversationMode: Boolean
-        get() = str("conversation", "1") == "1"
+        get() = conversationEnabled(prefs.getString("conversation", null))
         set(v) = put("conversation", if (v) "1" else "0")
 
     /** How many times the first-run "how to talk and close" hint has been shown. */

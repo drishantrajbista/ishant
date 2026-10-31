@@ -117,7 +117,13 @@ private val ACTION_START = Regex(
 )
 
 /** Claude app mode can't act on the phone; a request that clearly asks it to should say so instead of opening Claude. */
-fun looksLikeAction(transcript: String): Boolean = ACTION_START.containsMatchIn(transcript.trim().lowercase())
+fun looksLikeAction(transcript: String): Boolean {
+    val t = transcript.trim().lowercase()
+    return ACTION_START.containsMatchIn(t) && !SEND_TEXT.containsMatchIn(t)
+}
+
+/** "send dad a message that i'm late": writing text for the user to paste (see the [COPY] rule), not an action Buddy can't do. */
+private val SEND_TEXT = Regex("^(hey buddy[, ]*)?(please |can you |could you |would you )?send\\b.*\\b(message|msg|text|sms|email|e-mail|mail|note|reply|caption)\\b")
 
 /** True if two coordinate arrays disagree by more than a pixel (used by tests of the mapping helpers). */
 internal fun near(a: Float, b: Float) = abs(a - b) <= 1f

@@ -128,6 +128,12 @@ fun isActionTool(name: String) = name !in READ_ONLY_TOOLS
 fun shouldOpenFollowUp(enabled: Boolean, spokeAnswer: Boolean, actionsRan: Boolean, reply: String): Boolean =
     enabled && spokeAnswer && reply.isNotBlank() && (!actionsRan || reply.trimEnd().endsWith("?"))
 
+/** The stored "conversation" value: only an explicit "1" turns hands-free follow-up on (no value, "0" or anything else is off). */
+fun conversationEnabled(stored: String?): Boolean = stored == "1"
+
+/** The follow-up window may open only if conversation mode is on, Buddy is idle and no window is already open. With it off the mic opens only while the bubble is held. */
+fun canOpenFollowUp(enabled: Boolean, state: BuddyState, alreadyOpen: Boolean): Boolean = enabled && state == BuddyState.IDLE && !alreadyOpen
+
 enum class FollowUpState { CLOSED, WAITING, HEARING }
 
 /** The follow-up listening window: opens after an answer, closes on silence, a tap, or once the user has spoken. */

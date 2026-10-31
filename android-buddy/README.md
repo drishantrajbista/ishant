@@ -313,6 +313,23 @@ accessibility to save screenshots". Claude API mode has the same thing as a `sav
 *Screenshot & crop* also has a **Save** button (Android 10+) that saves the selected part, at full resolution, to
 `Pictures/Buddy`.
 
+### Write and copy
+
+Ask Buddy to write some text for you (a note, a caption, a reply, an email, or "write a message to Kristina saying I'll
+call at 10", "send dad a message that I'm late", in English or Nepali). It writes just the words to use inside
+`[COPY]...[/COPY]` at the end of its reply (no name label, no "message:", no quotes, no explanation) and says in one short
+sentence that it's copied. Buddy parses the block (any case, spaces and newlines allowed; nothing is copied if the markers
+are malformed or empty), puts the content on the clipboard with a "copied" toast, trims quotes around it, and removes the
+markers from what is shown and spoken (the written text itself is still shown and spoken so you can check it). It works the
+same in Claude API and Claude app mode (the app's answer is parsed when it comes back; the hand-off text carries the rule).
+This only writes text for you to paste: it never opens an app, looks up a contact or sends anything.
+
+- The reply card shows a small **Copy** button while an answer is on screen: it copies the written text if the reply had a
+  `[COPY]` block, else the reply as displayed (tags and markdown removed). Transcript entries have Copy as before.
+- Say **"copy that"**, "copy it" or "copy the text" (Nepali: "copy gara") to copy the last answer's written text, or the whole
+  last answer if it had none; the bubble says "copied". "Write a message", "send a message", "message gara" and the like are
+  not local commands: they go to Claude.
+
 ### Everyday requests that are ambiguous
 
 For everyday tasks (opening apps, changing settings, searching, media, screenshots) the prompt tells Claude to use the
@@ -320,12 +337,18 @@ current screen, the memory notes and the recent conversation to pick the most li
 above), and, when you correct it, to call `remember` with a short note so the same correction isn't needed twice. The
 confirmation rules (sending, posting, paying, deleting, security settings, permissions) are unchanged.
 
-### Conversation mode
+### Conversation mode (off by default)
 
-On by default (a switch under *Capabilities*). After Buddy has finished speaking an answer it listens for about 6 seconds
-for a follow-up, with the voice engine you picked, without the bubble being held; the bubble shows the listening ring and
-"go ahead…". Silence or a tap ends it, and the conversation context is kept (the 90 second follow-up window). It does not
-open after a plain action confirmation ("done"), only after a spoken answer (or a question Buddy asks you).
+Buddy listens **only while you hold the bubble**. The microphone opens when the hold is confirmed (the short buzz), never on a
+tap or a drag, for both the phone recognizer and Gemini voice, and it is closed the moment you let go (the Gemini recording
+has no tail), so the system's microphone indicator clears on release. Installs that never touched the switch (it used to
+default to on) are now off; a choice you made is kept.
+
+If you switch **Conversation mode** on (a switch under *Capabilities*), then after Buddy has finished speaking an answer it
+also listens for about 6 seconds for a follow-up, with the voice engine you picked, without the bubble being held; the bubble
+shows the listening ring and "go ahead…". Silence or a tap ends it, and the conversation context is kept (the 90 second
+follow-up window). It does not open after a plain action confirmation ("done"), only after a spoken answer (or a question
+Buddy asks you).
 
 ## Speed
 
