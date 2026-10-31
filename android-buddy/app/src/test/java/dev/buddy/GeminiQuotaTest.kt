@@ -46,6 +46,8 @@ private object Bodies {
 
     val perMinute = body("$INTRO, limit: 5, model: gemini-2.5-flash\\nPlease retry in 13.289s.",
         "GenerateRequestsPerMinutePerProjectPerModel-FreeTier", "5", "13s")
+    val perMinuteShort = body("$INTRO, limit: 5, model: gemini-2.5-flash\\nPlease retry in 4.2s.",
+        "GenerateRequestsPerMinutePerProjectPerModel-FreeTier", "5", "4s")
     val perMinuteSlow = body("$INTRO, limit: 5, model: gemini-2.5-flash\\nPlease retry in 41.5s.",
         "GenerateRequestsPerMinutePerProjectPerModel-FreeTier", "5", "41s")
     val perDay = body("$INTRO, limit: 20, model: gemini-2.5-flash\\nPlease retry in 35.126s.",
@@ -196,10 +198,10 @@ class ModelFallbackTest {
 
     @Test fun shortPerMinuteLimitIsWaitedOutOnceThenRetried() {
         var calls = 0
-        val result = run { m, _ -> if (m == flash && calls++ == 0) throw tooMany(Bodies.perMinute) else "ok:$m" }
+        val result = run { m, _ -> if (m == flash && calls++ == 0) throw tooMany(Bodies.perMinuteShort) else "ok:$m" }
         assertEquals("ok:$flash", result)
-        assertEquals(listOf(13_300L), sleeps)
-        assertEquals(listOf<String?>("busy, retrying in 13s", null), notices)
+        assertEquals(listOf(4_300L), sleeps)
+        assertEquals(listOf<String?>("busy, retrying in 4s", null), notices)
         assertTrue(store.exhausted(day).isEmpty())
     }
 
@@ -207,11 +209,14 @@ class ModelFallbackTest {
         val result = run { m, _ -> if (m == flash) throw tooMany(Bodies.perMinuteSlow) else "ok:$m" }
         assertEquals("ok:$LITE_LATEST", result)
         assertTrue(sleeps.isEmpty())
+        attempts.clear()
+        assertEquals("ok:$LITE_LATEST", run { m, _ -> if (m == flash) throw tooMany(Bodies.perMinute) else "ok:$m" })   // 13 s: too long
+        assertTrue(sleeps.isEmpty())
         assertTrue(store.exhausted(day).isEmpty())   // per-minute isn't daily exhaustion
     }
 
     @Test fun aPerMinuteLimitIsOnlyRetriedOnce() {
-        val result = run { m, _ -> if (m == flash) throw tooMany(Bodies.perMinute) else "ok:$m" }
+        val result = run { m, _ -> if (m == flash) throw tooMany(Bodies.perMinuteShort) else "ok:$m" }
         assertEquals("ok:$LITE_LATEST", result)
         assertEquals(1, sleeps.size)
         assertEquals(2, attempts.count { it.first == flash && it.second == ModelFallback.THINKING[0] })

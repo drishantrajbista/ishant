@@ -76,9 +76,9 @@ fun parseKey(text: String): KeyAction? = when (text.trim().lowercase().replace("
 
 class AppMatch(val best: String?, val candidates: List<String>)
 
-private fun norm(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
+internal fun norm(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
 
-private fun edit(a: String, b: String): Int {
+internal fun edit(a: String, b: String): Int {
     var prev = IntArray(b.length + 1) { it }
     for (i in 1..a.length) {
         val cur = IntArray(b.length + 1).also { it[0] = i }
@@ -156,3 +156,17 @@ const val MAIN_SETTINGS_ACTION = "android.settings.SETTINGS"
 
 /** The Settings intent action for a page name; the main Settings screen if the page is unknown. */
 fun settingsAction(page: String): String = SETTINGS_ACTIONS[page] ?: MAIN_SETTINGS_ACTION
+
+const val MAX_MESSAGES = 24
+const val FOLLOW_UP_MS = 90_000L
+
+/** A quick follow-up (within 90 s) keeps the conversation; otherwise each hold starts fresh so old screenshots aren't re-sent. */
+fun keepContext(lastAt: Long, now: Long, messageCount: Int): Boolean =
+    lastAt != 0L && now - lastAt < FOLLOW_UP_MS && messageCount < MAX_MESSAGES
+
+/** What's wrong with the accessibility service, in words for the user, or null if it is fine. */
+fun a11yProblem(enabled: Boolean, connected: Boolean): String? = when {
+    connected -> null
+    enabled -> "Buddy is enabled but not connected: turn Buddy off and on again in Accessibility"
+    else -> "Claude can't control the screen yet: turn on Buddy in Accessibility"
+}

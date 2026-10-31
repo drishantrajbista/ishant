@@ -16,6 +16,7 @@ import android.graphics.PointF
 import android.os.Build
 import android.media.projection.MediaProjectionManager
 import android.os.IBinder
+import android.os.SystemClock
 import android.widget.Toast
 import android.util.DisplayMetrics
 import android.view.WindowManager
@@ -73,6 +74,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     )
     private var handoff: Handoff? = null    // non-null while an answer from the Claude app is awaited
     private var waitJob: Job? = null
+    private var pressEndAt = 0L   // when the finger lifted: the start of the clock for a request
     private var stopping = false   // the user pressed Stop, so a projection that ends is not news
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -116,8 +118,17 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         bubble = BubbleOverlay(this, this).also { it.show() }
         speaker = Speaker(this, { settings.speechRate }) { finishSpeaking() }
         phone = PhoneListener(this, this)
+        if (projectionNeeded) ScreenProbe.projection = { capturer!!.frame() }
         ready = true
         running.value = true
+        // Once after Start in Claude API mode: check key, accessibility, screen capture and voice, and say what's wrong.
+        if (settings.provider == Provider.CLAUDE) scope.launch {
+            delay(1500)
+            SetupCheck.run(this@BuddyService, settings).firstOrNull { !it.ok }?.let {
+                bubble?.setText("setup check: ${it.name.lowercase()}: ${it.detail}")
+                textJob?.cancel(); textJob = scope.launch { delay(8000); bubble?.setText(null) }
+            }
+        }
         return START_NOT_STICKY
     }
 
@@ -132,6 +143,13 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     }
 
     override fun onTouchAbort() { discardRecording() }
+
+    override fun onPressCancel() {
+        discardRecording()
+        cancelWork()   // also stops the phone recognizer
+        bubble?.setText(null)
+        setState(BuddyState.IDLE)
+    }
 
     override fun onClose() {
         Toast.makeText(this, "Buddy closed", Toast.LENGTH_SHORT).show()
@@ -155,6 +173,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     }
 
     override fun onPressEnd() {
+        pressEndAt = SystemClock.elapsedRealtime()
         val clip = recording
         when {
             clip != null -> {
@@ -203,9 +222,10 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         if (transcript.isBlank()) return showMessage(NOT_HEARD)
         bubble?.setText(null)
         setState(BuddyState.PROCESSING)
+        TimingLog.record("voice", SystemClock.elapsedRealtime() - pressEndAt, "phone")
         startCapture()   // already running if the finger lifted before the recognizer finished
         val shot = shotJob!!
-        launchWork { answer(shot.await(), transcript) }
+        launchWork { if (!tryLocal(transcript)) answer(shot.await(), transcript) }
     }
 
     /** Gemini voice: the clip is transcribed (the screenshot is being taken meanwhile), then answered as usual. */
@@ -219,15 +239,42 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             settings.markGeminiVoiceOutToday()   // phone voice until the next Pacific midnight, then back to Gemini
             throw e
         }
+        TimingLog.record("voice", SystemClock.elapsedRealtime() - pressEndAt, "gemini")
+        if (tryLocal(transcript)) return
         bubble?.setText("heard: ${transcript.take(100)}")
         answer(shot.await(), transcript)
     }
 
     private suspend fun answer(obs: Observation, transcript: String) {
-        if (settings.provider == Provider.CLAUDE_APP) {
-            if (looksLikeAction(transcript)) return say("screen control needs claude api mode")
-            handOffToClaude(obs.shot, transcript)
-        } else act(obs, transcript)
+        try {
+            if (settings.provider == Provider.CLAUDE_APP) {
+                if (looksLikeAction(transcript)) return say("screen control needs claude api mode. switch it in buddy's settings")
+                handOffToClaude(obs.shot, transcript)
+            } else act(obs, transcript)
+        } finally {
+            TimingLog.record("total", SystemClock.elapsedRealtime() - pressEndAt, settings.provider.name)
+        }
+    }
+
+    /** Simple commands ("open YouTube", "flashlight on", "volume up", "go home") run right here, with no Claude call. */
+    private suspend fun tryLocal(transcript: String): Boolean {
+        val t0 = SystemClock.elapsedRealtime()
+        val apps by lazy { launchableApps() }
+        val command = routeLocal(transcript) { apps.keys.toList() } ?: return false
+        val done = when (command) {
+            is LocalCommand.OpenApp -> { launchApp(apps.getValue(command.label)); "opening ${command.label}" }
+            is LocalCommand.Nav -> BuddyAccessibilityService.instance?.takeIf { it.nav(command.action) }?.let { command.action.replace('_', ' ') }
+            is LocalCommand.Torch -> if (setTorch(command.on)) "flashlight ${if (command.on) "on" else "off"}" else null
+            is LocalCommand.Volume -> if (changeVolume(command.action)) "volume ${command.action}" else null
+            is LocalCommand.OpenSettings -> try {
+                startActivity(Intent(settingsAction(command.page)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); "${command.page} settings"
+            } catch (e: Exception) { null }
+        } ?: return false   // can't do it here (e.g. accessibility is off): let Claude explain
+        TimingLog.record("local", SystemClock.elapsedRealtime() - t0, done)
+        TimingLog.record("total", SystemClock.elapsedRealtime() - pressEndAt, "local")
+        bubble?.buzz()
+        showMessage(done, 1500)
+        return true
     }
 
     /** Claude API mode: let Claude look, tap, type and scroll until the request is done, then speak its answer. */
@@ -247,7 +294,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             if (forClaudeApp) {
                 // Claude's image pipeline downsizes anything over ~1456 px / ~1.15 MP, which would shift coordinates;
                 // sending exactly that size keeps the pixels Claude points at the pixels we draw at.
-                Observation(hiddenCapture { captureScreen(1456, 85, 1_150_000) }, "")
+                Observation(TimingLog.time("screen") { hiddenCapture { captureScreen(1456, 85, 1_150_000) } }, "")
             } else control.observe(settle = false)
         }
     }
@@ -283,6 +330,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         override suspend fun glide(x: Float, y: Float) { drawing?.glideTo(PointF(x, y), bubble!!.center()) }
         override fun status(text: String) = agentStatus(text)
         override fun bubbleTouchable(on: Boolean) { bubble?.setTouchable(on) }
+        override fun needAccessibility(message: String) = notifyAccessibilityNeeded(message)
     }
 
     // endregion
@@ -371,6 +419,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
                 say(e.message.orEmpty())
             } catch (e: Exception) {
                 speaker.stop()
+                TimingLog.lastError = friendly(e)
                 showMessage(friendly(e))
             }
         }
@@ -485,6 +534,23 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             .build()
     }
 
+    /** The agent needs the accessibility service and it's off or disconnected: bubble text, plus a notification that opens its settings. */
+    private fun notifyAccessibilityNeeded(message: String) {
+        bubble?.setText(message)
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel(A11Y_CHANNEL_ID, "Accessibility needed", NotificationManager.IMPORTANCE_DEFAULT))
+        nm.notify(
+            A11Y_NOTIFICATION_ID,
+            NotificationCompat.Builder(this, A11Y_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_buddy)
+                .setContentTitle("Buddy can't control the screen")
+                .setContentText(message)
+                .setContentIntent(PendingIntent.getActivity(this, 3, Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS), PendingIntent.FLAG_IMMUTABLE))
+                .setAutoCancel(true)
+                .build(),
+        )
+    }
+
     /** The screen share ended on its own (the user ended it, or the system did): say so, since Buddy can't see now. */
     private fun notifyProjectionEnded() {
         val nm = getSystemService(NotificationManager::class.java)
@@ -504,6 +570,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     override fun onDestroy() {
         stopping = true
         running.value = false
+        ScreenProbe.projection = null
         scope.cancel()
         recording?.discard()
         if (::phone.isInitialized) phone.destroy()
@@ -522,6 +589,8 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         private const val EXTRA_DATA = "projection_data"
         private const val CHANNEL_ID = "buddy"
         private const val NOTIFICATION_ID = 1
+        private const val A11Y_CHANNEL_ID = "buddy_a11y"
+        private const val A11Y_NOTIFICATION_ID = 3
         private const val STOPPED_CHANNEL_ID = "buddy_stopped"
         private const val STOPPED_NOTIFICATION_ID = 2
         private const val WAIT_MS = 10 * 60_000L

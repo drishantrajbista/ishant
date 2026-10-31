@@ -43,7 +43,7 @@ Answers always come from Claude. Gemini is only an optional voice-to-text engine
    ```
    <question>
 
-   [buddy: my screenshot is WxH px. reply in 1-3 short spoken sentences, no markdown. to show me on screen add tags in screenshot pixels: [POINT:x,y:label] [CIRCLE:x,y,r] [BOX:x1,y1,x2,y2] [ARROW:x1,y1,x2,y2] [LINE:x1,y1,x2,y2] [PATH:x1,y1,x2,y2,...] [TEXT:x,y:words]]
+   [buddy: my screenshot is WxH px. answer to the point in one short sentence (more only if i ask), no markdown. to show me on screen add tags in screenshot pixels: [POINT:x,y:label] [CIRCLE:x,y,r] [BOX:x1,y1,x2,y2] [ARROW:x1,y1,x2,y2] [LINE:x1,y1,x2,y2] [PATH:x1,y1,x2,y2,...] [TEXT:x,y:words]]
    ```
 3. **Send:** tap send in the Claude app. (If your question didn't arrive with the screenshot, paste it: it is on the
    clipboard.)
@@ -204,6 +204,31 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 
 The APK is at `app/build/outputs/apk/debug/app-debug.apk`. A prebuilt copy is in `release/buddy-debug.apk` for
 sideloading.
+
+## Speed
+
+- **Local commands** need no AI and run instantly in either mode: "open <app>" (only on a confident match), "go home", "go
+  back", "recent apps", "open notifications", "quick settings", "flashlight on/off", "volume up/down/mute/max" and "open
+  wifi/bluetooth/display/battery/sound/location settings". Anything else goes to Claude. (Home/back/recents/notifications
+  need the accessibility service; without it Claude explains.)
+- Each hold starts a fresh conversation (a follow-up within 90 s keeps it), so old screenshots are not re-sent. Agent
+  screenshots are small (1024 px, JPEG 60) and, after an action, Claude gets the screen's new element list as text so it
+  rarely needs another screenshot. Phone voice is the default because it is the fastest; Gemini voice is more accurate but
+  adds about 1-2 s.
+
+## Updates (sideload build)
+
+The home screen checks `release/version.json` in this repository at most once an hour and shows an "Update available"
+banner; *Install* opens the APK link in your browser (Android only accepts the update if it is signed with the same key).
+The Play bundle is built with `-PplayStore=true`, which switches the check off.
+
+## Troubleshooting
+
+Use **Check setup** on the home screen: it tests the mode, your Claude key and network (a tiny live request, with its
+latency), accessibility, a test screenshot and voice, with a fix button for each failure. **Copy report** puts a plain
+text report on the clipboard (version, device, Android, mode, model, voice, check results, the last ~30 timing entries and
+the last error; only the last 4 characters of your key) to paste when asking for help. The home screen also shows the
+last answer's timing, e.g. "Last answer: 6.2 s (Claude 4.1 s, voice 1.5 s, screen 0.6 s)".
 
 ## Privacy
 

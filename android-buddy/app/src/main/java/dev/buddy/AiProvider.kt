@@ -61,3 +61,16 @@ internal suspend fun httpJson(request: Request): JSONObject {
         }
     }
 }
+
+/** A plain GET (or any request) whose response is text. Cancellable. */
+internal suspend fun httpText(request: Request): String {
+    val call = sharedHttp.newCall(request)
+    val response = suspendCancellableCoroutine<Response> { cont ->
+        cont.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onResponse(call: Call, response: Response) { if (cont.isActive) cont.resume(response) else response.close() }
+            override fun onFailure(call: Call, e: IOException) = cont.resumeWithException(e)
+        })
+    }
+    return withContext(Dispatchers.IO) { response.use { if (!it.isSuccessful) throw apiError(it); it.body!!.string() } }
+}

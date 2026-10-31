@@ -19,7 +19,14 @@ interface Stage {
     fun status(text: String)
     /** The bubble can't be tapped while a gesture is dispatched, so a gesture aimed under it still reaches the app. */
     fun bubbleTouchable(on: Boolean)
+    /** The accessibility service is off or disconnected: tell the user (bubble and a notification). */
+    fun needAccessibility(message: String)
 }
+
+private val SCREEN_CHANGING = setOf(
+    "left_click", "double_click", "right_click", "left_click_drag", "scroll", "type", "key",
+    "open_app", "open_url", "open_settings", "android_nav",
+)
 
 /** Carries out Claude's tool calls on the real phone through [BuddyAccessibilityService]. */
 class PhoneControl(private val context: Context, private val stage: Stage) : Phone {
@@ -33,22 +40,38 @@ class PhoneControl(private val context: Context, private val stage: Stage) : Pho
 
     private val a11y get() = BuddyAccessibilityService.instance
     private fun hands(): BuddyAccessibilityService =
-        a11y ?: throw ToolError("buddy's accessibility service is off. ask the user to turn it on in accessibility settings")
+        a11y ?: run {
+            val problem = a11yProblem(BuddyAccessibilityService.isEnabled(context), false).orEmpty()
+            stage.needAccessibility(problem)
+            throw ToolError("$problem. tell the user")
+        }
 
     override suspend fun observe(settle: Boolean): Observation {
-        if (settle) a11y?.settle()
+        if (settle) TimingLog.time("settle") { a11y?.settle() }
+        val t0 = System.nanoTime()
         val full = stage.frame()
         lastFull = full
-        val shot = encodeScreenshot(full, 1280, 70)
+        val shot = encodeScreenshot(full, 1024, 60)   // small and quick; the element list gives exact coordinates
+        TimingLog.record("screen", (System.nanoTime() - t0) / 1_000_000, "${shot.width}x${shot.height}, ${shot.jpeg.size / 1024} KB")
         val m = ScreenMap(shot.width, shot.height, shot.displayWidth, shot.displayHeight)
         map = m
         elements = a11y?.elements(shot.width.toFloat() / shot.displayWidth, shot.height.toFloat() / shot.displayHeight).orEmpty()
         return Observation(shot, formatElements(elements))
     }
 
+    /** After a batch that changed the screen: wait for it to settle and hand Claude the fresh element list as text. */
+    override suspend fun afterBatch(last: ToolUse): String? {
+        if (last.name !in SCREEN_CHANGING) return null
+        val hands = a11y ?: return null
+        val m = map ?: return null
+        TimingLog.time("settle") { hands.settle() }
+        elements = hands.elements(m.shotW.toFloat() / m.displayW, m.shotH.toFloat() / m.displayH)
+        return "screen now:\n" + formatElements(elements)
+    }
+
     override suspend fun run(use: ToolUse, status: (String) -> Unit): List<JSONObject> {
         shotResult = null
-        if (use.isComputer) computer(use) else custom(use)
+        TimingLog.time("action", use.name) { if (use.isComputer) computer(use) else custom(use) }
         return shotResult ?: listOf(AgentJson.text("OK"))
     }
 
@@ -59,7 +82,7 @@ class PhoneControl(private val context: Context, private val stage: Stage) : Pho
             "open_settings" -> openSettings(use.input.optString("page"), use.input.optString("package"))
             "list_apps" -> {
                 stage.status("looking at your apps")
-                shotResult = listOf(AgentJson.text(launchableApps().keys.sorted().take(300).joinToString(", ").ifEmpty { "none" }))
+                shotResult = listOf(AgentJson.text(context.launchableApps().keys.sorted().take(300).joinToString(", ").ifEmpty { "none" }))
             }
             "android_nav" -> {
                 val action = use.input.optString("action")
@@ -170,12 +193,6 @@ class PhoneControl(private val context: Context, private val stage: Stage) : Pho
         shotResult = listOf(AgentJson.image(encodeScreenshot(crop, 1280, 70).jpeg))
     }
 
-    private fun launchableApps(): Map<String, android.content.pm.ResolveInfo> {
-        val pm = context.packageManager
-        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        return pm.queryIntentActivities(launcher, PackageManager.MATCH_ALL).associateBy { it.loadLabel(pm).toString() }
-    }
-
     private fun launch(intent: Intent) {
         try {
             context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -208,16 +225,11 @@ class PhoneControl(private val context: Context, private val stage: Stage) : Pho
     }
 
     private suspend fun openApp(name: String) {
-        val pm = context.packageManager
-        val apps = launchableApps()
+        val apps = context.launchableApps()
         val match = matchApps(name, apps.keys.toList())
         val label = match.best ?: throw ToolError("no app named \"$name\". closest: ${match.candidates.joinToString(", ").ifEmpty { "none" }}")
-        val info = apps.getValue(label).activityInfo
         stage.status("opening $label")
-        context.startActivity(
-            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-                .setClassName(info.packageName, info.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED),
-        )
+        context.launchApp(apps.getValue(label))
         a11y?.acted()
     }
 }

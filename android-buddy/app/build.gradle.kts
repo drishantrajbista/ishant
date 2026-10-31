@@ -21,8 +21,10 @@ android {
         applicationId = "dev.buddy"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "1.5"
+        versionCode = 11
+        versionName = "1.6"
+        // Play forbids self-updating apps: build the bundle with -PplayStore=true to switch the update check off.
+        buildConfigField("boolean", "UPDATE_CHECK", if (project.hasProperty("playStore")) "false" else "true")
     }
 
     signingConfigs {
@@ -52,7 +54,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
 }
 
 dependencies {

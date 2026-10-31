@@ -16,6 +16,8 @@ interface Phone {
     suspend fun observe(settle: Boolean): Observation
     /** Runs one tool call and returns the blocks of its result (an image + text for screenshots, else just "OK"). */
     suspend fun run(use: ToolUse, status: (String) -> Unit): List<JSONObject>
+    /** Text to append to the batch's last result (the screen's new element list), when the batch changed the screen. */
+    suspend fun afterBatch(last: ToolUse): String?
 }
 
 /**
@@ -29,7 +31,8 @@ class ClaudeAgent(private val settings: Settings) {
 
     suspend fun run(transcript: String, first: Observation, phone: Phone, status: (String) -> Unit): String {
         val now = SystemClock.elapsedRealtime()
-        if (now - lastAt > IDLE_MS || messages.length() >= MAX_MESSAGES) messages = JSONArray()
+        // History is append-only, so every request re-sends every old screenshot: only a quick follow-up keeps it.
+        if (!keepContext(lastAt, now, messages.length())) messages = JSONArray()
         lastAt = now
 
         val content = JSONArray()
@@ -66,6 +69,10 @@ class ClaudeAgent(private val settings: Settings) {
                     results.put(AgentJson.result(use, null, e.message ?: "failed"))
                 }
             }
+            if (!failed) phone.afterBatch(uses.last())?.let { fresh ->
+                // Saves a screenshot round trip: the last result also carries the screen's new element list.
+                results.getJSONObject(results.length() - 1).getJSONArray("content").put(AgentJson.text(fresh))
+            }
             messages.put(AgentJson.user(results))
         }
         throw SpokenException("that took too many steps, so i stopped. tell me where to pick it up")
@@ -73,19 +80,21 @@ class ClaudeAgent(private val settings: Settings) {
 
     private suspend fun post(): JSONObject {
         val model = settings.claudeModel
-        val body = AgentJson.request(model, AGENT_PROMPT, messages)
-        val request = Request.Builder()
-            .url("https://api.anthropic.com/v1/messages")
-            .post(body.toString().toRequestBody("application/json".toMediaType()))
-            .header("x-api-key", settings.claudeKey)
-            .header("anthropic-version", "2023-06-01")
-            .apply { if (AgentJson.usesFallbacks(model)) header("anthropic-beta", "server-side-fallback-2026-07-01") }
-            .build()
+        val text = AgentJson.request(model, AGENT_PROMPT, messages).toString()
+        val request = messagesRequest(settings.claudeKey, model, text)
+        val t0 = System.nanoTime()
+        var status = "200"
         try {
             return httpJson(request)
         } catch (e: ApiException) {
+            status = e.code.toString()
             claudeErrorMessage(e.code, e.body)?.let { throw SpokenException(it) }
             throw e
+        } catch (e: java.io.IOException) {
+            status = e.javaClass.simpleName
+            throw e
+        } finally {
+            TimingLog.record("claude", (System.nanoTime() - t0) / 1_000_000, "${text.length / 1024} KB, HTTP $status")
         }
     }
 
@@ -93,8 +102,15 @@ class ClaudeAgent(private val settings: Settings) {
         "screen 1 (image dimensions: ${o.shot.width}x${o.shot.height} pixels). screen elements, coordinates in " +
             "screenshot pixels:\n${o.elements}"
 
-    private companion object {
-        const val MAX_MESSAGES = 40
-        const val IDLE_MS = 10 * 60_000L
-    }
 }
+
+/** The Messages API request, with the headers the agent uses (and the ping in Check setup). */
+internal fun messagesRequest(key: String, model: String, body: JSONObject) = messagesRequest(key, model, body.toString())
+
+internal fun messagesRequest(key: String, model: String, body: String): Request = Request.Builder()
+    .url("https://api.anthropic.com/v1/messages")
+    .post(body.toRequestBody("application/json".toMediaType()))
+    .header("x-api-key", key)
+    .header("anthropic-version", "2023-06-01")
+    .apply { if (AgentJson.usesFallbacks(model)) header("anthropic-beta", "server-side-fallback-2026-07-01") }
+    .build()

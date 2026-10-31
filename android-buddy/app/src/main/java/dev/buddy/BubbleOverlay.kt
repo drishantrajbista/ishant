@@ -52,6 +52,8 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         fun onPressStart()
         /** Released after push-to-talk. */
         fun onPressEnd()
+        /** Push-to-talk was abandoned because the finger started dragging: stop listening, say nothing. */
+        fun onPressCancel()
         /** The bubble was dropped on the close target. */
         fun onClose()
         fun onTap()
@@ -389,9 +391,14 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
                     handler.postDelayed(holdRunnable, HOLD_MS)
                     callbacks.onTouchDown()
                 }
-                MotionEvent.ACTION_MOVE -> if (!pttActive) {
+                MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - downX; val dy = e.rawY - downY
-                    if (!dragging && hypot(dx, dy) > slop) {
+                    if (pttActive && hypot(dx, dy) > dp(40f)) {
+                        // A finger that rested 250 ms and then moved wants to drag, not talk: drop the recording quietly.
+                        pttActive = false
+                        dragging = true
+                        callbacks.onPressCancel()
+                    } else if (!pttActive && !dragging && hypot(dx, dy) > slop) {
                         dragging = true
                         handler.removeCallbacks(holdRunnable)
                         callbacks.onTouchAbort()

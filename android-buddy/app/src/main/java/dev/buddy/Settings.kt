@@ -62,13 +62,13 @@ class Settings(context: Context) : QuotaStore {
         set(v) = put("voice", v?.name.orEmpty())
 
     /**
-     * Gemini voice is the default whenever a Gemini key is saved; otherwise the phone's recognizer. If Gemini ran out
+     * The phone's recognizer is the default (it is the fastest); Gemini voice is an explicit choice. If Gemini ran out
      * of free quota today the phone's recognizer is used until the next Pacific midnight, then it switches back.
      */
     val voiceEngine: VoiceEngine
         get() = when {
             str("voice_out_day") == pacificDay() -> VoiceEngine.PHONE
-            else -> voiceChoice ?: if (geminiKey.isNotBlank()) VoiceEngine.GEMINI else VoiceEngine.PHONE
+            else -> voiceChoice ?: VoiceEngine.PHONE
         }
 
     fun markGeminiVoiceOutToday() = put("voice_out_day", pacificDay())

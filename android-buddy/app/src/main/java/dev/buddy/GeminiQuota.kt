@@ -209,7 +209,7 @@ class ModelFallback(
     }
 
     companion object {
-        const val MAX_WAIT_SEC = 15.0
+        const val MAX_WAIT_SEC = 5.0
         val THINKING = listOf("""{"thinkingBudget":0}""", """{"thinkingLevel":"low"}""", null)
     }
 }

@@ -80,7 +80,7 @@ class DrawingOverlay(private val context: Context) {
     }
 
     /** Agent mode: the cursor glides to [to] (screen px) in [ms]. It stays on screen until [clear]. Suspends until there. */
-    suspend fun glideTo(to: PointF, from: PointF, ms: Long = 200) = suspendCancellableCoroutine<Unit> { cont ->
+    suspend fun glideTo(to: PointF, from: PointF, ms: Long = 150) = suspendCancellableCoroutine<Unit> { cont ->
         handler.removeCallbacks(clearLater)
         view.glide(to, from, ms) { if (cont.isActive) cont.resume(Unit) }
         cont.invokeOnCancellation { view.stopAnimation() }

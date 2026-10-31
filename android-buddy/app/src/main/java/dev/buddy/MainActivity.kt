@@ -41,6 +41,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
@@ -120,8 +122,11 @@ private class AppState(private val context: Context, val settings: Settings) {
     var notifOk by mutableStateOf(false)
     var a11yOn by mutableStateOf(false)
     var claudeInstalled by mutableStateOf(false)
+    var a11yConnected by mutableStateOf(false)
+    var modeNote by mutableStateOf<String?>(null)
 
-    val voice get() = voiceChoice ?: if (geminiKey.isNotBlank()) VoiceEngine.GEMINI else VoiceEngine.PHONE
+    /** Phone voice is the default (fastest); Gemini is an explicit choice. */
+    val voice get() = voiceChoice ?: VoiceEngine.PHONE
 
     init { refresh() }
 
@@ -131,12 +136,20 @@ private class AppState(private val context: Context, val settings: Settings) {
         micOk = context.has(Manifest.permission.RECORD_AUDIO)
         notifOk = Build.VERSION.SDK_INT < 33 || context.has(Manifest.permission.POST_NOTIFICATIONS)
         a11yOn = BuddyAccessibilityService.isEnabled(context)
+        a11yConnected = BuddyAccessibilityService.instance != null
         claudeInstalled = context.isClaudeAppInstalled()
     }
 
     fun pick(p: Provider) { provider = p; settings.provider = p }
     fun pick(v: VoiceEngine) { voiceChoice = v; settings.voiceChoice = v }
-    fun saveClaudeKey(raw: String) { claudeKey = cleanKey(raw); settings.claudeKey = raw }
+    fun saveClaudeKey(raw: String) {
+        claudeKey = cleanKey(raw); settings.claudeKey = raw
+        // A real-looking key means the user wants the API: switch to it (it's the mode that can control the phone).
+        if (looksLikeClaudeKey(claudeKey) && provider != Provider.CLAUDE) {
+            pick(Provider.CLAUDE)
+            modeNote = "Claude API mode on: Claude can now control your phone"
+        }
+    }
     fun saveGeminiKey(raw: String) { geminiKey = raw; settings.geminiKey = raw }
     fun saveClaudeModel(m: String) { claudeModel = m; settings.claudeModel = m }
     fun saveGeminiModel(m: String) { geminiModel = m; settings.geminiModel = m }
@@ -160,7 +173,11 @@ private fun BuddyApp(settings: Settings) {
     val running by BuddyService.running.collectAsState()
     var onboarding by remember { mutableStateOf(!settings.onboarded) }
 
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { state.refresh() }
+    val appScope = rememberCoroutineScope()
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        state.refresh()
+        appScope.launch { UpdateCheck.maybeCheck(context) }   // at most once an hour; sideload builds only
+    }
 
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { state.micOk = it }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { state.notifOk = it }
@@ -178,6 +195,7 @@ private fun BuddyApp(settings: Settings) {
                 !state.micOk -> "Allow the microphone first"
                 else -> null
             }
+            appScope.launch { UpdateCheck.maybeCheck(context) }
             when {
                 problem != null -> Toast.makeText(context, problem, Toast.LENGTH_SHORT).show()
                 Build.VERSION.SDK_INT >= 30 && BuddyAccessibilityService.instance != null -> BuddyService.start(context)
@@ -341,11 +359,74 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
     val live by BuddyService.live.collectAsState()
     var languageMenu by remember { mutableStateOf(false) }
     fun tick() = haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    val update by UpdateCheck.available.collectAsState()
+    val summary by TimingLog.summary.collectAsState()
+    val checks by SetupCheck.results.collectAsState()
+    val checking by SetupCheck.running.collectAsState()
+    fun fixIt(f: Fix) = when (f) {
+        Fix.SWITCH_TO_API -> state.pick(Provider.CLAUDE)
+        Fix.OPEN_ACCESSIBILITY -> actions.openAccessibility()
+        Fix.ADD_CREDIT -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.anthropic.com")))
+        Fix.ADD_KEY -> Toast.makeText(context, "Enter your Claude API key under Brain", Toast.LENGTH_SHORT).show()
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
         LargeTitle("Buddy")
         Spacer(Modifier.height(12.dp))
         StartButton(running, if (running) live else "Tap to start", actions)
+        summary?.let { Text(it, Modifier.fillMaxWidth().padding(top = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, textAlign = TextAlign.Center) }
+
+        // An update is waiting (sideload builds): the install button opens the APK link in the browser.
+        update?.let { u ->
+            Spacer(Modifier.height(16.dp))
+            Group {
+                SettingRow("Update ${u.versionName} available", u.notes, Icons.Default.Info,
+                    onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u.apk))) }) {
+                    Text("Install", color = Accent, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+
+        // Claude API mode can answer without accessibility, but it can't touch the screen.
+        val a11yProblem = a11yProblem(state.a11yOn, state.a11yConnected)
+        if (state.provider == Provider.CLAUDE && a11yProblem != null) {
+            Spacer(Modifier.height(16.dp))
+            Group {
+                SettingRow(a11yProblem, icon = Icons.Default.Settings, onClick = actions.openAccessibility) {
+                    Text("Open settings", color = Accent, fontWeight = FontWeight.SemiBold)
+                }
+            }
+            if (Build.VERSION.SDK_INT >= 33 && !state.a11yOn) RestrictedSettingsHelp()
+        }
+
+        // --- Setup check ---
+        SectionLabel("Setup")
+        Group {
+            SettingRow(if (checking) "Checking…" else "Check setup", "Tests your key, accessibility, screen capture and voice", Icons.Default.Settings,
+                onClick = { if (!checking) scope.launch { SetupCheck.run(context, state.settings) } }) { Chevron() }
+            checks.forEach { c ->
+                RowDivider()
+                SettingRow(c.name, c.detail + (c.ms?.let { " ($it ms)" } ?: "")) {
+                    if (c.ok) CheckMark(Green) else {
+                        c.fix?.let { f -> TextButton(onClick = { fixIt(f) }) { Text(fixLabel(f), color = Accent) } }
+                        Icon(Icons.Default.Close, null, tint = Color(0xFFFF3B30))
+                    }
+                }
+            }
+            RowDivider()
+            SettingRow("Copy report", "Everything needed to diagnose a problem (never your API key)", onClick = {
+                val info = ReportInfo(
+                    version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty(),
+                    device = "${Build.MANUFACTURER} ${Build.MODEL}", android = "Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})",
+                    mode = state.provider.name, model = state.claudeModel, voice = state.voice.name,
+                    keyMasked = maskKey(state.settings.claudeKey), checks = checks, timing = TimingLog.entries(),
+                    lastError = TimingLog.lastError, secretToScrub = state.settings.claudeKey,
+                )
+                (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                    .setPrimaryClip(android.content.ClipData.newPlainText("Buddy report", buildReport(info)))
+                Toast.makeText(context, "Report copied", Toast.LENGTH_SHORT).show()
+            }) { Chevron() }
+        }
 
         // --- Brain ---
         SectionLabel("Brain")
@@ -375,16 +456,17 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
                 }
             }
         }
+        state.modeNote?.let { Note(it) }
         if (state.provider == Provider.CLAUDE) Note("Haiku 5.5: fastest. Sonnet 5.5: smarter for long multi-app tasks.")
 
         // --- Voice ---
         SectionLabel("Voice")
         Group {
-            SettingRow("Gemini", "Most accurate. Handles accents and mixed languages.", Icons.Default.Call, onClick = { tick(); state.pick(VoiceEngine.GEMINI) }) {
+            SettingRow("Gemini", "Most accurate (adds about 1–2 s). Handles accents and mixed languages.", Icons.Default.Call, onClick = { tick(); state.pick(VoiceEngine.GEMINI) }) {
                 if (state.voice == VoiceEngine.GEMINI) CheckMark()
             }
             RowDivider()
-            SettingRow("Phone", "Google speech, built into your phone.", Icons.Default.Call, onClick = { tick(); state.pick(VoiceEngine.PHONE) }) {
+            SettingRow("Phone", "Fastest. Google speech, built into your phone.", Icons.Default.Call, onClick = { tick(); state.pick(VoiceEngine.PHONE) }) {
                 if (state.voice == VoiceEngine.PHONE) CheckMark()
             }
             if (state.voice == VoiceEngine.GEMINI) {
@@ -496,6 +578,13 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
         }
         Spacer(Modifier.height(32.dp))
     }
+}
+
+private fun fixLabel(f: Fix) = when (f) {
+    Fix.SWITCH_TO_API -> "Switch"
+    Fix.OPEN_ACCESSIBILITY -> "Open"
+    Fix.ADD_CREDIT -> "Add credit"
+    Fix.ADD_KEY -> "Add key"
 }
 
 private fun claudeModelLabel(id: String) = when (id) {

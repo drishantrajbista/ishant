@@ -216,8 +216,8 @@ class BuddyAccessibilityService : AccessibilityService() {
 
     companion object {
         @Volatile var instance: BuddyAccessibilityService? = null
-        private const val QUIET_MS = 300L
-        private const val SETTLE_MAX_MS = 1500L
+        private const val QUIET_MS = 250L
+        private const val SETTLE_MAX_MS = 1000L
         private const val TOO_SOON = 3      // ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT
         private const val SECURE_WINDOW = 5 // ERROR_TAKE_SCREENSHOT_SECURE_WINDOW
 
