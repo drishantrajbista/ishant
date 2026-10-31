@@ -21,8 +21,8 @@ android {
         applicationId = "dev.buddy"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.6"
+        versionCode = 12
+        versionName = "1.7"
         // Play forbids self-updating apps: build the bundle with -PplayStore=true to switch the update check off.
         buildConfigField("boolean", "UPDATE_CHECK", if (project.hasProperty("playStore")) "false" else "true")
     }
@@ -59,6 +59,7 @@ android {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation(platform("androidx.compose:compose-bom:2024.10.01"))

@@ -34,6 +34,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Request
@@ -74,6 +75,10 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     )
     private var handoff: Handoff? = null    // non-null while an answer from the Claude app is awaited
     private var waitJob: Job? = null
+    private val followUp = FollowUp()                // the hands-free follow-up listening window
+    private var followJob: Job? = null
+    private var replyEligible = false                // the reply being spoken may be followed by a follow-up window
+    private var lastLoudAt = 0L
     private var pressEndAt = 0L   // when the finger lifted: the start of the clock for a request
     private var stopping = false   // the user pressed Stop, so a projection that ends is not news
 
@@ -121,6 +126,11 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         if (projectionNeeded) ScreenProbe.projection = { capturer!!.frame() }
         ready = true
         running.value = true
+        // The first few times: say how to talk and how to close, so exiting never depends on discovering the drag.
+        if (shouldShowHint(settings.hintsShown)) {
+            settings.hintsShown += 1
+            showMessage(BUBBLE_HINT, 5000)
+        }
         // Once after Start in Claude API mode: check key, accessibility, screen capture and voice, and say what's wrong.
         if (settings.provider == Provider.CLAUDE) scope.launch {
             delay(1500)
@@ -135,6 +145,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     // region touch and push-to-talk
 
     override fun onTouchDown() {
+        if (followUp.isOpen) endFollowUp()   // touching the bubble ends the follow-up window
         warmUp()   // DNS and TLS are done by the time the question is ready
         if (settings.voiceEngine != VoiceEngine.GEMINI) return
         // Gemini voice records from the first instant so the first word isn't clipped; a tap or drag discards it.
@@ -176,13 +187,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         pressEndAt = SystemClock.elapsedRealtime()
         val clip = recording
         when {
-            clip != null -> {
-                recording = null
-                setState(BuddyState.PROCESSING)
-                startCapture()   // grab the screen while the clip's last word is still being recorded
-                val shot = shotJob!!
-                launchWork { handleAudio(clip, shot) }
-            }
+            clip != null -> { recording = null; submitClip(clip) }
             phone.isActive -> {
                 setState(BuddyState.PROCESSING)
                 startCapture()   // grab the screen while the recognizer finishes
@@ -190,6 +195,58 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             }
         }
     }
+
+    /** Sends a recorded clip off: transcribe it while the screen is captured. */
+    private fun submitClip(clip: VoiceRecording) {
+        setState(BuddyState.PROCESSING)
+        startCapture()   // grab the screen while the clip's last word is still being recorded
+        val shot = shotJob!!
+        launchWork { handleAudio(clip, shot) }
+    }
+
+    // region follow-up window (conversation mode)
+
+    /** After a spoken answer: listen ~6 s for a follow-up without the bubble being held. Silence or a tap ends it. */
+    private fun openFollowUp() {
+        if (!settings.conversationMode || state != BuddyState.IDLE || followUp.isOpen) return
+        followUp.open()
+        setState(BuddyState.LISTENING)
+        bubble?.setText("go ahead…")
+        when (settings.voiceEngine) {
+            VoiceEngine.PHONE -> if (!phone.start(settings.speechLanguage, handsFree = true)) return endFollowUp()
+            VoiceEngine.GEMINI -> {
+                if (settings.geminiKey.isBlank()) return endFollowUp()
+                lastLoudAt = 0L
+                recording = VoiceRecording(this, ::followLevel, { submitFollowUp() }).takeIf { it.start() } ?: return endFollowUp()
+            }
+        }
+        followJob = scope.launch { delay(FOLLOW_UP_LISTEN_MS); if (followUp.timeout()) endFollowUp() }
+    }
+
+    /** Gemini voice has no recognizer to say when you're done, so the mic level decides: 1.2 s of quiet after speech. */
+    private fun followLevel(level: Float) {
+        bubble?.setLevel(level)
+        if (!followUp.isOpen) return
+        val now = SystemClock.elapsedRealtime()
+        if (level > 0.2f) { followUp.speechStarted(); lastLoudAt = now }
+        else if (followUp.state == FollowUpState.HEARING && now - lastLoudAt > 1200) submitFollowUp()
+    }
+
+    private fun submitFollowUp() {
+        val clip = recording ?: return
+        recording = null
+        followJob?.cancel(); followUp.close()
+        pressEndAt = SystemClock.elapsedRealtime()
+        submitClip(clip)
+    }
+
+    private fun endFollowUp() {
+        followJob?.cancel(); followUp.close()
+        phone.cancel(); discardRecording()
+        if (state == BuddyState.LISTENING) { bubble?.setText(null); setState(BuddyState.IDLE) }
+    }
+
+    // endregion
 
     override fun onTap() {
         when {
@@ -211,9 +268,20 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     // PhoneListener.Events
     override fun onLevel(level: Float) { bubble?.setLevel(level) }
     override fun onText(text: String) { bubble?.setText(text) }
-    override fun onReady() { bubble?.buzz() }
-    override fun onResult(text: String) = heard(text)
-    override fun onError(message: String) = showMessage(message)
+    override fun onReady() { if (!followUp.isOpen) bubble?.buzz() }
+    override fun onSpeechStart() = followUp.speechStarted()
+    override fun onResult(text: String) {
+        if (followUp.isOpen) {
+            followJob?.cancel(); followUp.close()
+            if (text.isBlank()) { bubble?.setText(null); setState(BuddyState.IDLE); return }   // silence: close quietly
+            pressEndAt = SystemClock.elapsedRealtime()
+        }
+        heard(text)
+    }
+    override fun onError(message: String) {
+        if (followUp.isOpen) { followJob?.cancel(); followUp.close(); bubble?.setText(null); setState(BuddyState.IDLE) }
+        else showMessage(message)
+    }
 
     // endregion
 
@@ -256,12 +324,30 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         }
     }
 
+    /** "What's my day": a short spoken summary from the clock, calendar and notifications that are allowed. */
+    private suspend fun speakBriefing(t0: Long) {
+        shotJob?.cancel(); shotJob = null
+        val events = if (hasCalendarPermission()) withContext(Dispatchers.IO) { runCatching { upcomingEvents(10) }.getOrNull() } else null
+        val notifications = if (notificationAccessEnabled()) NotificationStore.entries() else null
+        val (battery, charging) = batteryInfo()
+        val text = composeBriefing(java.time.ZonedDateTime.now(), battery, charging, events, notifications)
+        TimingLog.record("local", SystemClock.elapsedRealtime() - t0, "briefing")
+        TimingLog.record("total", SystemClock.elapsedRealtime() - pressEndAt, "local")
+        replyEligible = settings.conversationMode
+        say(text)
+    }
+
     /** Simple commands ("open YouTube", "flashlight on", "volume up", "go home") run right here, with no Claude call. */
     private suspend fun tryLocal(transcript: String): Boolean {
         val t0 = SystemClock.elapsedRealtime()
         val apps by lazy { launchableApps() }
         val command = routeLocal(transcript) { apps.keys.toList() } ?: return false
+        if (command is LocalCommand.Briefing) { speakBriefing(t0); return true }
         val done = when (command) {
+            is LocalCommand.Briefing -> null
+            is LocalCommand.Alarm -> try { setAlarm(command.hour, command.minute, null); "alarm set for ${clockText(command.hour, command.minute)}" } catch (e: ToolError) { null }
+            is LocalCommand.Timer -> try { setTimer(command.seconds, null); "timer set for ${durationText(command.seconds)}" } catch (e: ToolError) { null }
+            is LocalCommand.Media -> if (mediaKey(command.action)) "media ${command.action}" else null
             is LocalCommand.OpenApp -> { launchApp(apps.getValue(command.label)); "opening ${command.label}" }
             is LocalCommand.Nav -> BuddyAccessibilityService.instance?.takeIf { it.nav(command.action) }?.let { command.action.replace('_', ' ') }
             is LocalCommand.Torch -> if (setTorch(command.on)) "flashlight ${if (command.on) "on" else "off"}" else null
@@ -281,6 +367,8 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     private suspend fun act(obs: Observation, transcript: String) {
         val text = agent.run(transcript, obs, control, this::agentStatus)
         drawing?.clear()
+        // Open a follow-up window after a spoken answer, not after "done" for an action (no hot-mic surprises).
+        replyEligible = shouldOpenFollowUp(settings.conversationMode, true, agent.acted, text)
         present(text, control.map)
     }
 
@@ -437,6 +525,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
 
     /** Stops whatever is going on: listening, the request, speech, the pointer. (A recording in progress is kept.) */
     private fun cancelWork() {
+        followJob?.cancel(); followUp.close(); replyEligible = false
         phone.cancel()
         job?.cancel()
         shotJob?.cancel(); shotJob = null
@@ -462,6 +551,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         bubble?.setText(null)
         drawing?.speechEnded()
         setState(BuddyState.IDLE)
+        if (replyEligible) { replyEligible = false; openFollowUp() }
     }
 
     /** What the agent is doing right now: shown in the bubble and on the home screen. */
@@ -484,6 +574,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     }
 
     private fun showMessage(text: String, ms: Long = 4000) {
+        replyEligible = false
         shotJob?.cancel(); shotJob = null
         setState(BuddyState.IDLE)
         bubble?.setText(text)
@@ -530,7 +621,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(0, "Show Claude's answer", showAnswer)
-            .addAction(0, "Stop", stop)
+            .addAction(0, "Close Buddy", stop)
             .build()
     }
 
@@ -595,6 +686,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         private const val STOPPED_NOTIFICATION_ID = 2
         private const val WAIT_MS = 10 * 60_000L
         private const val NO_SCREEN = "turn on buddy in accessibility settings, or restart buddy and allow screen sharing"
+        private const val FOLLOW_UP_LISTEN_MS = 6500L
         private const val CAPTURE_DELAY_MS = 100L
         private const val OVERLAY_VISIBLE_MS = 150L
         private const val GEMINI_URL = "https://generativelanguage.googleapis.com/"

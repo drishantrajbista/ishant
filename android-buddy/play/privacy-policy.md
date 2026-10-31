@@ -24,6 +24,11 @@ Screenshots are not captured at any other time. The app does not keep a history 
 
 **Clipboard.** In Claude app mode the app places your question on the clipboard so you can paste it if needed, and reads the clipboard only when you tap the bubble to show Claude's answer.
 
+**Calendar and notifications (optional, off by default).** If you allow it, Buddy can read your upcoming calendar events
+(read-only) and, with Notification access, the last 30 notifications (app, title, text, time), which are held in memory
+only and never written to disk. They are used only when you ask (for example for a briefing); in Claude API mode that text
+is sent to Anthropic to answer you. You can revoke either at any time in Android Settings.
+
 ## What the app does not do
 - No analytics, no crash-reporting SDK, no advertising SDKs, no trackers.
 - No account with the developer, and no data sent to the developer or any server the developer runs.

@@ -19,6 +19,9 @@ Answers for the Data safety form, based on what the app actually does. Review th
 | App info and performance / App activity > Other user-generated content or actions | Yes (the user's spoken question as text; screen elements and action results when the accessibility service is on) | Yes, with Anthropic (Claude API mode) | App functionality | Yes |
 | Personal info, financial info, location, contacts, messages, health, web history, device or other IDs | No (the app does not collect them on its own; screenshots could incidentally contain anything on screen, which the user chooses to send) | n/a | n/a | n/a |
 
+| Calendar > Calendar events | Yes, only if the user allows READ_CALENDAR and asks about their schedule | Yes, with Anthropic (Claude API mode) | App functionality | Yes |
+| Messages / App activity > notifications text | Yes, only with the optional Notification access, in memory only, when the user asks | Yes, with Anthropic (Claude API mode) | App functionality | Yes |
+
 Notes for the free-text fields:
 - Transfers go to AI service providers acting on the user's request, using the user's own API key or account. Nothing is sent to the developer.
 - Not processed for any purpose other than producing the response.

@@ -36,6 +36,12 @@ Shows the floating bubble, the reply card, and the cursor and drawings that poin
 ## POST_NOTIFICATIONS
 Shows the required foreground service notification (Stop, Show Claude's answer) and a notice if screen sharing ends.
 
+## READ_CALENDAR, notification listener, SET_ALARM, ACCESS_WIFI_STATE
+- `READ_CALENDAR`: optional, read-only, requested only when the user switches on Calendar in Buddy's settings; used to answer questions about their schedule and for the spoken briefing.
+- `BIND_NOTIFICATION_LISTENER_SERVICE` (NotificationListenerService): optional, enabled by the user in Android's Notification access screen; keeps the last 30 notifications in memory only (never on disk) so the assistant can read them out or summarise them when asked.
+- `SET_ALARM`: lets the assistant set an alarm or timer the user asked for.
+- `ACCESS_WIFI_STATE`: lets the assistant report whether wifi is on when asked.
+
 ## INTERNET
 Sends requests to the AI provider the user chose (api.anthropic.com, generativelanguage.googleapis.com).
 

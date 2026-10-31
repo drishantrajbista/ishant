@@ -20,6 +20,8 @@ class PhoneListener(private val context: Context, private val events: Events) {
         fun onText(text: String)
         /** The recognizer is listening (first time per press): the user can start talking. */
         fun onReady()
+        /** The user began talking (used to give a hands-free follow-up window its full length). */
+        fun onSpeechStart() {}
         /** The press is over. [text] is everything heard, "" if nothing. */
         fun onResult(text: String)
         fun onError(message: String)
@@ -38,10 +40,11 @@ class PhoneListener(private val context: Context, private val events: Events) {
     var isActive = false
         private set
 
-    fun start(language: String): Boolean {
+    /** [handsFree]: no finger is held, so the first recognizer session is the whole utterance. */
+    fun start(language: String, handsFree: Boolean = false): Boolean {
         val r = recognizer ?: create() ?: return false
         this.language = language
-        isActive = true; fingerDown = true; buzzed = false
+        isActive = true; fingerDown = !handsFree; buzzed = false
         segments.clear()
         listen(r)
         return true
@@ -149,7 +152,7 @@ class PhoneListener(private val context: Context, private val events: Events) {
                 }
             }
         }
-        override fun onBeginningOfSpeech() {}
+        override fun onBeginningOfSpeech() = events.onSpeechStart()
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() {}
         override fun onEvent(eventType: Int, params: Bundle?) {}

@@ -29,11 +29,16 @@ class ClaudeAgent(private val settings: Settings) {
     private var messages = JSONArray()
     private var lastAt = 0L
 
+    /** True if the last request ran anything but looking tools: an action, not just an answer. */
+    var acted = false
+        private set
+
     suspend fun run(transcript: String, first: Observation, phone: Phone, status: (String) -> Unit): String {
         val now = SystemClock.elapsedRealtime()
         // History is append-only, so every request re-sends every old screenshot: only a quick follow-up keeps it.
         if (!keepContext(lastAt, now, messages.length())) messages = JSONArray()
         lastAt = now
+        acted = false
 
         val content = JSONArray()
         // A cancelled request can leave tool calls unanswered; they must be answered before anything else.
@@ -63,6 +68,7 @@ class ClaudeAgent(private val settings: Settings) {
             for (use in uses) {
                 if (failed) { results.put(AgentJson.result(use, null, AgentJson.HALT)); continue }
                 try {
+                    if (isActionTool(use.name)) acted = true
                     results.put(AgentJson.result(use, phone.run(use, status), null))
                 } catch (e: ToolError) {
                     failed = true

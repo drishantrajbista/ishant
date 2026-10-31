@@ -25,7 +25,7 @@ interface Stage {
 
 private val SCREEN_CHANGING = setOf(
     "left_click", "double_click", "right_click", "left_click_drag", "scroll", "type", "key",
-    "open_app", "open_url", "open_settings", "android_nav",
+    "open_app", "open_url", "open_settings", "android_nav", "web_search", "create_event",
 )
 
 /** Carries out Claude's tool calls on the real phone through [BuddyAccessibilityService]. */
@@ -80,6 +80,39 @@ class PhoneControl(private val context: Context, private val stage: Stage) : Pho
             "open_app" -> openApp(use.input.optString("name"))
             "open_url" -> openUrl(use.input.optString("url"))
             "open_settings" -> openSettings(use.input.optString("page"), use.input.optString("package"))
+            "set_alarm" -> {
+                val h = use.input.optInt("hour", -1); val m = use.input.optInt("minute", -1)
+                stage.status("setting an alarm")
+                context.setAlarm(h, m, use.input.optString("label"))
+                shotResult = listOf(AgentJson.text("alarm set for ${clockText(h, m)}"))
+            }
+            "set_timer" -> {
+                val s = use.input.optInt("seconds", -1)
+                stage.status("starting a timer")
+                context.setTimer(s, use.input.optString("label"))
+                shotResult = listOf(AgentJson.text("timer started for ${durationText(s)}"))
+            }
+            "create_event" -> {
+                val start = parseIso(use.input.optString("start_iso"), zone) ?: throw ToolError("start_iso must be an ISO date-time like 2025-11-03T15:00")
+                val end = use.input.optString("end_iso").takeIf { it.isNotBlank() }?.let { parseIso(it, zone) } ?: (start + 3600_000L)
+                stage.status("opening the calendar")
+                context.insertEvent(use.input.optString("title"), start, end, use.input.optString("location"))
+                shotResult = listOf(AgentJson.text("the calendar is open with the event filled in; the user confirms it there"))
+            }
+            "read_calendar" -> {
+                stage.status("checking the calendar")
+                shotResult = listOf(AgentJson.text(formatEvents(context.upcomingEvents(use.input.optInt("max", 5)), zone, System.currentTimeMillis())))
+            }
+            "read_notifications" -> {
+                if (!context.notificationAccessEnabled()) throw ToolError("notification access is off. ask the user to turn it on in buddy's settings")
+                stage.status("reading notifications")
+                shotResult = listOf(AgentJson.text(formatNotifications(NotificationStore.entries(), zone)))
+            }
+            "media" -> { stage.status("media ${use.input.optString("action")}"); if (!context.mediaKey(use.input.optString("action"))) throw ToolError("unknown media action") }
+            "torch" -> { stage.status("flashlight"); if (!context.setTorch(use.input.optBoolean("on"))) throw ToolError("this phone has no flashlight") }
+            "volume" -> { stage.status("volume"); if (!context.changeVolume(use.input.optString("action"))) throw ToolError("unknown volume action") }
+            "device_status" -> shotResult = listOf(AgentJson.text(context.deviceStatus()))
+            "web_search" -> { stage.status("searching"); context.webSearch(use.input.optString("query")); a11y?.acted() }
             "list_apps" -> {
                 stage.status("looking at your apps")
                 shotResult = listOf(AgentJson.text(context.launchableApps().keys.sorted().take(300).joinToString(", ").ifEmpty { "none" }))

@@ -21,6 +21,15 @@ The floating bubble is a frosted-glass circle (translucent, soft shadow, thin bo
 waveform ring while listening, a rotating gradient arc while thinking, a pulse while speaking and a small cursor glyph
 while acting, and springs to the nearest screen edge when you let go. Replies appear on a rounded, softly shadowed card.
 
+## Design
+
+A calm, minimal, grouped-card look with a custom Material3 theme that follows the system light/dark setting: a grouped
+background, inset rounded cards (20 dp) with hairline separators, an iOS-like type scale on the system font, rows with
+tinted rounded-square icons, segmented controls, spring animations and a light haptic on presses (plain fades if you have
+animations switched off). The accent is the brand colour `#D97757`. The adaptive launcher icon (a rounded cursor with a
+speech dot on a warm gradient, with a themed-icon layer), the Android 12+ splash screen and a 512x512 Play icon
+(`play/icon-512.png`) are all generated from that one design.
+
 ## Modes
 
 Answers always come from Claude. Gemini is only an optional voice-to-text engine (see *Voice recognition*).
@@ -204,6 +213,37 @@ echo "sdk.dir=/path/to/android-sdk" > local.properties
 
 The APK is at `app/build/outputs/apk/debug/app-debug.apk`. A prebuilt copy is in `release/buddy-debug.apk` for
 sideloading.
+
+## Capabilities
+
+In Claude API mode Claude has direct tools, so simple jobs skip the tap-through: **alarms and timers** (set directly),
+**calendar** (`create_event` opens the calendar's new-event screen filled in for you to confirm; `read_calendar` reads
+upcoming events), **notifications** (`read_notifications`), **media** (play, pause, next, previous), **flashlight**,
+**volume**, **device status** (battery, time, wifi, ringer), **web search**, **links**, **Settings pages** and **app
+launching**. Alarms, timers, media, flashlight and volume need no special permission. Two things are opt-in, with toggles
+under *Capabilities* in setup:
+
+- **Notification access** (opens Android's Notification access screen): Buddy keeps the last 30 notifications (app, title,
+  text, time) **in memory only, never on disk**, and sends them to Claude only when you ask about them.
+- **Calendar** (asks for READ_CALENDAR): read-only; used only when you ask about your schedule or ask for a briefing.
+
+Calendar entries, notifications and on-screen text are treated as data, never as instructions. The same safety rules
+as before apply (confirmation before sending, paying, posting or deleting; never typing into password fields). The simple
+ones (alarm, timer, media, flashlight, volume) also run as instant local commands, e.g. "set a timer for 5 minutes",
+"set an alarm for 7 am", "pause", "next song".
+
+### Briefing
+
+Say "what's my day", "good morning", "what did I miss" or "briefing": Buddy speaks one short paragraph built locally with
+no Claude call: the time, your next 1 to 3 events, the number of notifications and the latest one, and the battery if it
+is low. A source you haven't allowed is skipped silently.
+
+### Conversation mode
+
+On by default (a switch under *Capabilities*). After Buddy has finished speaking an answer it listens for about 6 seconds
+for a follow-up, with the voice engine you picked, without the bubble being held; the bubble shows the listening ring and
+"go ahead…". Silence or a tap ends it, and the conversation context is kept (the 90 second follow-up window). It does not
+open after a plain action confirmation ("done"), only after a spoken answer (or a question Buddy asks you).
 
 ## Speed
 

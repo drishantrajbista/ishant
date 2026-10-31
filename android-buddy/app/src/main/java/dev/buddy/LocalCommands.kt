@@ -15,7 +15,54 @@ sealed class LocalCommand {
     data class Torch(val on: Boolean) : LocalCommand()
     data class Volume(val action: String) : LocalCommand()
     data class OpenSettings(val page: String) : LocalCommand()
+    data class Alarm(val hour: Int, val minute: Int) : LocalCommand()
+    data class Timer(val seconds: Int) : LocalCommand()
+    data class Media(val action: String) : LocalCommand()
+    object Briefing : LocalCommand()
 }
+
+/** "7:30 am" for an alarm's hour and minute (24-hour in). */
+fun clockText(hour: Int, minute: Int): String =
+    "${(hour % 12).let { if (it == 0) 12 else it }}:%02d ${if (hour < 12) "am" else "pm"}".format(minute)
+
+/** "5 minutes", "1 hour 30 minutes", "45 seconds". */
+fun durationText(seconds: Int): String {
+    val h = seconds / 3600; val m = seconds % 3600 / 60; val s = seconds % 60
+    fun unit(n: Int, w: String) = "$n $w${if (n == 1) "" else "s"}"
+    return listOfNotNull(h.takeIf { it > 0 }?.let { unit(it, "hour") }, m.takeIf { it > 0 }?.let { unit(it, "minute") }, s.takeIf { it > 0 }?.let { unit(it, "second") })
+        .joinToString(" ").ifEmpty { "0 seconds" }
+}
+
+/** Total seconds in phrases like "5 minutes" or "1 hour 30 minutes"; null if there is no duration. */
+fun parseDuration(t: String): Int? {
+    val matches = Regex("(\\d+) ?(hours?|hrs?|minutes?|mins?|seconds?|secs?)\\b").findAll(t).toList()
+    if (matches.isEmpty()) return null
+    return matches.sumOf {
+        val n = it.groupValues[1].toInt()
+        n * when (it.groupValues[2][0]) { 'h' -> 3600; 'm' -> 60; else -> 1 }
+    }.takeIf { it in 1..86_400 }
+}
+
+/** (hour, minute) 24-hour from "7 am", "6 30 pm", or an unambiguous 24-hour hour (13-23); null if ambiguous. */
+fun parseClock(hourText: String, minuteText: String, ampm: String): Pair<Int, Int>? {
+    var h = hourText.toIntOrNull() ?: return null
+    val m = minuteText.ifEmpty { "0" }.toIntOrNull() ?: return null
+    if (m !in 0..59) return null
+    when (ampm) {
+        "am" -> { if (h !in 1..12) return null; if (h == 12) h = 0 }
+        "pm" -> { if (h !in 1..12) return null; if (h != 12) h += 12 }
+        else -> if (h !in 13..23) return null
+    }
+    return h to m
+}
+
+private val MEDIA_PHRASES = mapOf(
+    "pause" to "pause", "pause music" to "pause", "pause the music" to "pause", "stop the music" to "pause", "stop music" to "pause",
+    "play" to "play", "play music" to "play", "play the music" to "play", "resume" to "play", "resume music" to "play",
+    "play pause" to "playpause",
+    "next song" to "next", "next track" to "next", "skip" to "next", "skip song" to "next", "skip this song" to "next", "skip track" to "next",
+    "previous song" to "previous", "previous track" to "previous", "last song" to "previous", "go to the previous song" to "previous",
+)
 
 private val FILLER_START = Regex("^((hey )?buddy )?((can|could|would|will) you )?(please )?(kindly )?")
 private val FILLER_END = Regex(" (please|for me|now)$")
@@ -65,6 +112,14 @@ fun routeLocal(transcript: String, labels: () -> List<String>): LocalCommand? {
     if (t == "louder") return LocalCommand.Volume("up")
     if (t == "quieter") return LocalCommand.Volume("down")
 
+    if (Regex("^(whats|what s|what is) my day$|^good morning$|^what did i miss$|^(my |daily )?briefing$|^give me (my |a |the )?(daily )?briefing$|^brief me$").matches(t)) {
+        return LocalCommand.Briefing
+    }
+    MEDIA_PHRASES[t]?.let { return LocalCommand.Media(it) }
+    if ("timer" in t && t.split(' ').size <= 9) parseDuration(t)?.let { return LocalCommand.Timer(it) }
+    Regex("^(?:set (?:an )?alarm (?:for|at)|alarm (?:for|at)|wake me up at|wake me at) (\\d{1,2})(?: (\\d{2}))?(?: (am|pm))?$").find(t)?.let { m ->
+        parseClock(m.groupValues[1], m.groupValues[2], m.groupValues[3])?.let { return LocalCommand.Alarm(it.first, it.second) }
+    }
     Regex("^(?:open|show) (?:the )?(wifi|wi fi|bluetooth|display|battery|sound|location) settings$").find(t)?.let {
         return LocalCommand.OpenSettings(SETTINGS_WORDS.getValue(it.groupValues[1]))
     }

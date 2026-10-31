@@ -87,6 +87,16 @@ class Settings(context: Context) : QuotaStore {
         get() = str("speech_rate", "1.0").toFloatOrNull()?.coerceIn(0.8f, 1.5f) ?: 1f
         set(v) = put("speech_rate", v.coerceIn(0.8f, 1.5f).toString())
 
+    /** After a spoken answer, listen a few seconds for a follow-up without the bubble being held. */
+    var conversationMode: Boolean
+        get() = str("conversation", "1") == "1"
+        set(v) = put("conversation", if (v) "1" else "0")
+
+    /** How many times the first-run "how to talk and close" hint has been shown. */
+    var hintsShown: Int
+        get() = prefs.getInt("hints_shown", 0)
+        set(v) = prefs.edit().putInt("hints_shown", v).apply()
+
     var speechLanguage: String get() = str("speech_language"); set(v) = put("speech_language", v)
     var geminiKey: String get() = str("gemini_key"); set(v) = put("gemini_key", v)
     var geminiModel: String get() = str("gemini_model", DEFAULT_GEMINI_MODEL); set(v) = put("gemini_model", v)

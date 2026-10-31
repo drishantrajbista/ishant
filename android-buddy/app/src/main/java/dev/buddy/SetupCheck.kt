@@ -11,7 +11,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 
-enum class Fix { SWITCH_TO_API, OPEN_ACCESSIBILITY, ADD_CREDIT, ADD_KEY }
+enum class Fix { SWITCH_TO_API, OPEN_ACCESSIBILITY, ADD_CREDIT, ADD_KEY, NOTIFICATION_ACCESS, CALENDAR }
 
 class CheckResult(val name: String, val ok: Boolean, val detail: String, val ms: Long? = null, val fix: Fix? = null)
 
@@ -28,7 +28,7 @@ object SetupCheck {
     suspend fun run(context: Context, settings: Settings): List<CheckResult> {
         running.value = true
         try {
-            val list = listOf(mode(settings), claude(settings), accessibility(context), screen(), voice(context, settings))
+            val list = listOf(mode(settings), claude(settings), accessibility(context), screen(), voice(context, settings), notifications(context), calendar(context))
             results.value = list
             return list
         } finally {
@@ -91,6 +91,14 @@ object SetupCheck {
             CheckResult(name, false, e.message ?: e.javaClass.simpleName, (System.nanoTime() - t0) / 1_000_000)
         }
     }
+
+    private fun notifications(context: Context) =
+        if (context.notificationAccessEnabled()) CheckResult("Notification access", true, "allowed: Claude can read your last 30 notifications")
+        else CheckResult("Notification access", false, "optional: off, so Claude can't read notifications", fix = Fix.NOTIFICATION_ACCESS)
+
+    private fun calendar(context: Context) =
+        if (context.hasCalendarPermission()) CheckResult("Calendar", true, "allowed: Claude can read upcoming events")
+        else CheckResult("Calendar", false, "optional: not allowed, so Claude can't read your calendar", fix = Fix.CALENDAR)
 
     private fun voice(context: Context, s: Settings): CheckResult {
         val engine = s.voiceEngine

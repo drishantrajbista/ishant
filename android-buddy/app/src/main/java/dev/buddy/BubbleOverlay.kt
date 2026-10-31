@@ -70,7 +70,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
     /** The reply card: a rounded, softly shadowed card (the shadow is layered translucent shapes, inset so it isn't clipped). */
     private val textView = TextView(context).apply {
         setTextColor(if (darkMode) Color.WHITE else Color.rgb(0x1C, 0x1C, 0x1E))
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
         setLineSpacing(dp(2f), 1f)
         maxLines = 10
         ellipsize = android.text.TextUtils.TruncateAt.END
@@ -78,7 +78,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         val pad = inset + dp(14f).toInt()
         setPadding(pad, pad - dp(2f).toInt(), pad, pad + dp(2f).toInt())
         fun shape(color: Int, stroke: Boolean = false) = GradientDrawable().apply {
-            setColor(color); cornerRadius = dp(16f)
+            setColor(color); cornerRadius = dp(20f)
             if (stroke) setStroke(dp(1f).toInt(), if (darkMode) Color.argb(50, 255, 255, 255) else Color.argb(28, 0, 0, 0))
         }
         val card = shape(if (darkMode) Color.argb(245, 28, 28, 30) else Color.argb(247, 255, 255, 255), stroke = true)
@@ -142,10 +142,10 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         }.start()
     }
 
-    /** While dragging: within ~90 dp of the target the bubble snaps onto it (with a tick) and the target grows. */
+    /** While dragging: within ~110 dp of the target the bubble snaps onto it (with a tick) and the target grows. */
     private fun dragMoved(x: Int, y: Int) {
         val c = closeCenter()
-        val near = hypot(x + size / 2f - c.x, y + size / 2f - c.y) <= dp(90f)
+        val near = hypot(x + size / 2f - c.x, y + size / 2f - c.y) <= dp(110f)
         if (near != snapped) {
             snapped = near
             closeView.setActive(near)
@@ -246,7 +246,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         if (appearing) {   // fade and slide in
             textView.alpha = 0f
             textView.translationY = dp(10f)
-            textView.animate().alpha(1f).translationY(0f).setDuration(180).start()
+            textView.animate().alpha(1f).translationY(0f).setDuration(260).setInterpolator(OvershootInterpolator(0.9f)).start()
         }
     }
 
@@ -266,7 +266,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
     private fun positionText() {
         val m = context.resources.displayMetrics
         val margin = dp(8f).toInt()
-        textView.maxWidth = minOf(dp(280f).toInt(), (m.widthPixels * 0.8f).toInt())
+        textView.maxWidth = minOf(dp(300f).toInt(), (m.widthPixels * 0.85f).toInt())
         textView.measure(
             View.MeasureSpec.makeMeasureSpec(m.widthPixels, View.MeasureSpec.AT_MOST),
             View.MeasureSpec.makeMeasureSpec(m.heightPixels / 2, View.MeasureSpec.AT_MOST),
@@ -291,6 +291,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
             style = Paint.Style.STROKE; strokeWidth = dp(1f); color = if (dark) Color.argb(60, 255, 255, 255) else Color.argb(40, 0, 0, 0)
         }
         private val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val tintGlow = Paint(Paint.ANTI_ALIAS_FLAG)   // a faint brand tint toward the bottom
         private val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(14, 0, 0, 0) }
         private val accentFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent }
         private val tick = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent; strokeWidth = dp(2.5f); strokeCap = Paint.Cap.ROUND }
@@ -300,6 +301,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
             val cx = w / 2f; val cy = h / 2f; val r = dp(19f)
             sheen.shader = LinearGradient(cx, cy - r, cx, cy + r, Color.argb(if (dark) 36 else 130, 255, 255, 255), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+            tintGlow.shader = LinearGradient(cx, cy, cx, cy + r, Color.TRANSPARENT, Color.argb(if (dark) 46 else 34, 0xD9, 0x77, 0x57), Shader.TileMode.CLAMP)
             arc.shader = SweepGradient(cx, cy, intArrayOf(Color.TRANSPARENT, accent), null)
         }
         private val handler = Handler(Looper.getMainLooper())
@@ -343,6 +345,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
             for (i in 3 downTo 1) canvas.drawCircle(cx, cy + dp(1.5f) * i, r + dp(1.2f) * i, shadow)
             canvas.drawCircle(cx, cy, r, glass)
             canvas.drawCircle(cx, cy, r, sheen)
+            canvas.drawCircle(cx, cy, r, tintGlow)
             canvas.drawCircle(cx, cy, r, border)
             when (state) {
                 BuddyState.IDLE -> glyph(canvas, cx, cy, r)

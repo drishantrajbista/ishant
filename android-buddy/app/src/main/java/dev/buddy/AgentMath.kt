@@ -170,3 +170,10 @@ fun a11yProblem(enabled: Boolean, connected: Boolean): String? = when {
     enabled -> "Buddy is enabled but not connected: turn Buddy off and on again in Accessibility"
     else -> "Claude can't control the screen yet: turn on Buddy in Accessibility"
 }
+
+const val HINT_TIMES = 3
+
+/** The bubble's "hold to talk · drag down to ✕ to close" hint shows the first few times only. */
+fun shouldShowHint(shownBefore: Int) = shownBefore < HINT_TIMES
+
+const val BUBBLE_HINT = "hold to talk · drag down to ✕ to close"
