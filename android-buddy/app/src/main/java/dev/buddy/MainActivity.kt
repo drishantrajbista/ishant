@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
@@ -109,6 +110,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** Opening another screen can fail (no handler, or a permission); that should be a message, never a crash. */
+private fun Context.safeStart(intent: Intent) {
+    try { startActivity(intent) } catch (e: RuntimeException) { Toast.makeText(this, "couldn't open that", Toast.LENGTH_SHORT).show() }
+}
+
 private fun Context.has(permission: String) =
     ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
@@ -141,6 +147,7 @@ private class AppState(private val context: Context, val settings: Settings) {
     var calendarOk by mutableStateOf(false)
     var conversation by mutableStateOf(settings.conversationMode)
     var modeNote by mutableStateOf<String?>(null)
+    var crashText by mutableStateOf("")
 
     /** Phone voice is the default (fastest); Gemini is an explicit choice. */
     val voice get() = voiceChoice ?: VoiceEngine.PHONE
@@ -155,6 +162,7 @@ private class AppState(private val context: Context, val settings: Settings) {
         a11yOn = BuddyAccessibilityService.isEnabled(context)
         a11yConnected = BuddyAccessibilityService.instance != null
         notifAccess = context.notificationAccessEnabled()
+        crashText = CrashLog.read(context)
         calendarOk = context.hasCalendarPermission()
         claudeInstalled = context.isClaudeAppInstalled()
     }
@@ -227,12 +235,12 @@ private fun BuddyApp(settings: Settings) {
         },
         stop = { BuddyService.stop(context) },
         grantOverlay = {
-            context.startActivity(Intent(AndroidSettings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
+            context.safeStart(Intent(AndroidSettings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")))
         },
         grantMic = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) },
         grantNotifications = { if (Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
-        openAccessibility = { context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS)) },
-        openNotificationAccess = { context.startActivity(Intent(AndroidSettings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
+        openAccessibility = { context.safeStart(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS)) },
+        openNotificationAccess = { context.safeStart(Intent(AndroidSettings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
         grantCalendar = { calendarLauncher.launch(Manifest.permission.READ_CALENDAR) },
     )
 
@@ -402,7 +410,7 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
     fun fixIt(f: Fix) = when (f) {
         Fix.SWITCH_TO_API -> state.pick(Provider.CLAUDE)
         Fix.OPEN_ACCESSIBILITY -> actions.openAccessibility()
-        Fix.ADD_CREDIT -> context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.anthropic.com")))
+        Fix.ADD_CREDIT -> context.safeStart(Intent(Intent.ACTION_VIEW, Uri.parse("https://console.anthropic.com")))
         Fix.ADD_KEY -> Toast.makeText(context, "Enter your Claude API key under Brain", Toast.LENGTH_SHORT).show()
         Fix.NOTIFICATION_ACCESS -> actions.openNotificationAccess()
         Fix.CALENDAR -> actions.grantCalendar()
@@ -420,7 +428,7 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
                 Spacer(Modifier.height(20.dp))
                 GroupCard {
                     SettingRow("Update ${u.versionName} available", u.notes, Icons.Default.Info, Tint.Green,
-                        onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u.apk))) }) {
+                        onClick = { context.safeStart(Intent(Intent.ACTION_VIEW, Uri.parse(u.apk))) }) {
                         Text("Install", color = colors.accent, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
                     }
                 }
@@ -436,6 +444,9 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
                     }
                 }
                 if (Build.VERSION.SDK_INT >= 33 && !state.a11yOn) RestrictedSettingsHelp()
+                if (state.a11yOn && !state.a11yConnected) {
+                    Footnote("Samsung: Settings → Accessibility → Buddy → toggle off and on; if it keeps happening, tap Copy crash in Buddy and send it.")
+                }
             }
 
             // --- Brain ---
@@ -492,7 +503,7 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
                         }
                         Hairline()
                         SettingRow("Get a free key", "aistudio.google.com/apikey", Icons.Default.Share, Tint.Grey, onClick = {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
+                            context.safeStart(Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey")))
                         }) { Chevron() }
                         Hairline()
                         androidx.compose.foundation.layout.Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
@@ -600,12 +611,25 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
                         device = "${Build.MANUFACTURER} ${Build.MODEL}", android = "Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})",
                         mode = state.provider.name, model = state.claudeModel, voice = state.voice.name,
                         keyMasked = maskKey(state.settings.claudeKey), checks = checks, timing = TimingLog.entries(),
-                        lastError = TimingLog.lastError, secretToScrub = state.settings.claudeKey,
+                        lastError = TimingLog.lastError, crash = state.crashText.takeIf { it.isNotBlank() }, secretToScrub = state.settings.claudeKey,
                     )
                     (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
                         .setPrimaryClip(android.content.ClipData.newPlainText("Buddy report", buildReport(info)))
                     Toast.makeText(context, "Report copied", Toast.LENGTH_SHORT).show()
                 }) { Chevron() }
+                if (state.crashText.isNotBlank()) {
+                    Hairline()
+                    SettingRow("Last crash", state.crashText.lineSequence().firstOrNull { it.startsWith("exception:") }?.removePrefix("exception: ")?.take(80) ?: "Recorded", Icons.Default.Warning, Tint.Red) {
+                        Text(
+                            "Copy crash", color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.clip(RoundedCornerShape(50)).background(colors.accent).pressable {
+                                (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                                    .setPrimaryClip(android.content.ClipData.newPlainText("Buddy crash", scrubSecrets(state.crashText)))
+                                Toast.makeText(context, "Crash copied", Toast.LENGTH_SHORT).show()
+                            }.padding(horizontal = 14.dp, vertical = 6.dp),
+                        )
+                    }
+                }
             }
 
             // --- About ---
@@ -619,7 +643,7 @@ private fun Home(state: AppState, actions: Actions, running: Boolean) {
                 SettingRow("Screenshots", "Only captured when you release the bubble", Icons.Default.Lock, Tint.Green)
                 Hairline()
                 SettingRow("Based on Clicky by Farza (MIT)", "github.com/farzaa/clicky", Icons.Default.Favorite, Tint.Brand, onClick = {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/farzaa/clicky")))
+                    context.safeStart(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/farzaa/clicky")))
                 }) { Chevron() }
             }
             Footnote(

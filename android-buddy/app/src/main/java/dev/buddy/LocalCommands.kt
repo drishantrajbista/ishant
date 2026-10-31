@@ -149,7 +149,7 @@ fun Context.setTorch(on: Boolean): Boolean = try {
     if (id != null) { cm.setTorchMode(id, on); true } else false
 } catch (e: Exception) { false }
 
-fun Context.changeVolume(action: String): Boolean {
+fun Context.changeVolume(action: String): Boolean = try {
     val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
     val stream = AudioManager.STREAM_MUSIC
     when (action) {
@@ -157,7 +157,7 @@ fun Context.changeVolume(action: String): Boolean {
         "down" -> am.adjustStreamVolume(stream, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
         "mute" -> am.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, AudioManager.FLAG_SHOW_UI)
         "max" -> am.setStreamVolume(stream, am.getStreamMaxVolume(stream), AudioManager.FLAG_SHOW_UI)
-        else -> return false
+        else -> throw IllegalArgumentException(action)
     }
-    return true
-}
+    true
+} catch (e: RuntimeException) { false }   // unknown action, or a Do Not Disturb restriction

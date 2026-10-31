@@ -53,11 +53,10 @@ class DrawingOverlay(private val context: Context) {
 
     val hasContent get() = view.hasContent
 
-    fun show() {
-        if (added) return
+    fun show(): Boolean {
+        if (added) return true
         view.visibility = View.GONE
-        wm.addView(view, params)
-        added = true
+        return try { wm.addView(view, params); added = true; true } catch (e: RuntimeException) { false }   // permission revoked
     }
 
     fun remove() {
@@ -65,7 +64,7 @@ class DrawingOverlay(private val context: Context) {
         added = false
         handler.removeCallbacks(clearLater)
         view.clear()
-        wm.removeView(view)
+        try { wm.removeView(view) } catch (e: RuntimeException) { /* already gone */ }
     }
 
     /** Hides everything (without forgetting it) so the overlay isn't in a screenshot. */

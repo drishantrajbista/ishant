@@ -24,6 +24,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -51,7 +52,7 @@ import java.net.UnknownHostException
  * the capture session stays alive.
  */
 class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, e -> reportUncaught(e) })
     private lateinit var settings: Settings
     private lateinit var speaker: Speaker
     private lateinit var phone: PhoneListener
@@ -84,7 +85,28 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    /** Anything that goes wrong while starting must end in a message and a clean stop, never a crashed process. */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int =
+        try { startUp(intent) } catch (e: Throwable) { startFailed(e); START_NOT_STICKY }
+
+    private fun startFailed(e: Throwable) {
+        android.util.Log.e("Buddy", "start failed", e)
+        TimingLog.lastError = "start failed: ${e.javaClass.simpleName}: ${e.message}".take(200)
+        runCatching { CrashLog.write(this, Thread.currentThread(), e) }
+        runCatching { Toast.makeText(this, "Buddy couldn't start: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show() }
+        stopping = true
+        runCatching { stopSelf() }
+    }
+
+    /** A coroutine that ended with an exception nobody caught: say so in the bubble and log it; never kill the process. */
+    private fun reportUncaught(e: Throwable) {
+        android.util.Log.e("Buddy", "uncaught in a job", e)
+        TimingLog.lastError = "${e.javaClass.simpleName}: ${e.message}".take(200)
+        runCatching { CrashLog.write(this, Thread.currentThread(), e) }
+        runCatching { showMessage("something went wrong: ${e.message ?: e.javaClass.simpleName}".take(120)) }
+    }
+
+    private fun startUp(intent: Intent?): Int {
         when (intent?.action) {
             ACTION_STOP -> { stopping = true; stopSelf(); return START_NOT_STICKY }
             ACTION_ANSWER_TEXT -> {
@@ -110,8 +132,11 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
 
         settings = Settings(this)
         if (projectionNeeded) {
-            val projection = (getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager)
-                .getMediaProjection(code, data!!)
+            val projection = try {
+                (getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager).getMediaProjection(code, data!!)
+            } catch (e: RuntimeException) {
+                throw IllegalStateException("screen sharing couldn't start (${e.message ?: e.javaClass.simpleName}). start Buddy again")
+            }
             capturer = ScreenCapturer(this, projection) {
                 if (!stopping) notifyProjectionEnded()
                 stopSelf()
@@ -120,7 +145,9 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         agent = ClaudeAgent(settings)
         control = PhoneControl(this, stage)
         drawing = DrawingOverlay(this).also { it.show() }
-        bubble = BubbleOverlay(this, this).also { it.show() }
+        bubble = BubbleOverlay(this, this).also {
+            check(it.show()) { "couldn't draw the bubble. allow 'draw over other apps' in settings" }
+        }
         speaker = Speaker(this, { settings.speechRate }) { finishSpeaking() }
         phone = PhoneListener(this, this)
         if (projectionNeeded) ScreenProbe.projection = { capturer!!.frame() }
@@ -348,7 +375,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             is LocalCommand.Alarm -> try { setAlarm(command.hour, command.minute, null); "alarm set for ${clockText(command.hour, command.minute)}" } catch (e: ToolError) { null }
             is LocalCommand.Timer -> try { setTimer(command.seconds, null); "timer set for ${durationText(command.seconds)}" } catch (e: ToolError) { null }
             is LocalCommand.Media -> if (mediaKey(command.action)) "media ${command.action}" else null
-            is LocalCommand.OpenApp -> { launchApp(apps.getValue(command.label)); "opening ${command.label}" }
+            is LocalCommand.OpenApp -> try { launchApp(apps.getValue(command.label)); "opening ${command.label}" } catch (e: RuntimeException) { null }
             is LocalCommand.Nav -> BuddyAccessibilityService.instance?.takeIf { it.nav(command.action) }?.let { command.action.replace('_', ' ') }
             is LocalCommand.Torch -> if (setTorch(command.on)) "flashlight ${if (command.on) "on" else "off"}" else null
             is LocalCommand.Volume -> if (changeVolume(command.action)) "volume ${command.action}" else null
@@ -437,7 +464,8 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
             handoff = Handoff(shot.width, shot.height, shot.displayWidth, shot.displayHeight, question, text)
             startWaiting()
             showMessage("opened claude. tap send, then tap copy under its answer and tap me", 8000)
-        } catch (e: ActivityNotFoundException) {
+        } catch (e: RuntimeException) {
+            if (e !is ActivityNotFoundException) { showMessage("couldn't open claude"); return }
             if (isClaudeAppInstalled()) {
                 showMessage("this version of the claude app can't take shared screenshots")
             } else {
@@ -450,10 +478,14 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     /** The bubble was tapped while an answer is awaited: use a shared answer, else read the clipboard (see ClipboardActivity). */
     private fun showWaitingAnswer() {
         AnswerInbox.take()?.let { return onAnswerText(it) }
-        startActivity(
-            Intent(this, ClipboardActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION),
-        )
+        try {
+            startActivity(
+                Intent(this, ClipboardActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION),
+            )
+        } catch (e: RuntimeException) {
+            showMessage("couldn't read the clipboard. tap copy under claude's answer, then try again")
+        }
     }
 
     private fun onAnswerText(text: String) {
@@ -626,7 +658,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     }
 
     /** The agent needs the accessibility service and it's off or disconnected: bubble text, plus a notification that opens its settings. */
-    private fun notifyAccessibilityNeeded(message: String) {
+    private fun notifyAccessibilityNeeded(message: String) = runCatching {
         bubble?.setText(message)
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(A11Y_CHANNEL_ID, "Accessibility needed", NotificationManager.IMPORTANCE_DEFAULT))
@@ -640,7 +672,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
                 .setAutoCancel(true)
                 .build(),
         )
-    }
+    }.let { }
 
     /** The screen share ended on its own (the user ended it, or the system did): say so, since Buddy can't see now. */
     private fun notifyProjectionEnded() {
@@ -661,14 +693,14 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
     override fun onDestroy() {
         stopping = true
         running.value = false
-        ScreenProbe.projection = null
-        scope.cancel()
-        recording?.discard()
-        if (::phone.isInitialized) phone.destroy()
-        if (::speaker.isInitialized) speaker.shutdown()
-        bubble?.remove()
-        drawing?.remove()
-        capturer?.release()
+        runCatching { ScreenProbe.projection = null }
+        runCatching { scope.cancel() }
+        runCatching { recording?.discard() }
+        runCatching { if (::phone.isInitialized) phone.destroy() }
+        runCatching { if (::speaker.isInitialized) speaker.shutdown() }
+        runCatching { bubble?.remove() }
+        runCatching { drawing?.remove() }
+        runCatching { capturer?.release() }
         super.onDestroy()
     }
 
@@ -699,16 +731,20 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
 
         /** [data] is the screen-recording consent; not needed when the accessibility service provides screenshots. */
         fun start(context: Context, resultCode: Int = 0, data: Intent? = null) {
-            ContextCompat.startForegroundService(
-                context,
-                Intent(context, BuddyService::class.java)
-                    .putExtra(EXTRA_RESULT_CODE, resultCode)
-                    .apply { if (data != null) putExtra(EXTRA_DATA, data) },
-            )
+            try {
+                ContextCompat.startForegroundService(
+                    context,
+                    Intent(context, BuddyService::class.java)
+                        .putExtra(EXTRA_RESULT_CODE, resultCode)
+                        .apply { if (data != null) putExtra(EXTRA_DATA, data) },
+                )
+            } catch (e: RuntimeException) {   // e.g. the system refused a foreground service start
+                Toast.makeText(context, "Buddy couldn't start: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+            }
         }
 
         fun stop(context: Context) {
-            context.startService(Intent(context, BuddyService::class.java).setAction(ACTION_STOP))
+            try { context.startService(Intent(context, BuddyService::class.java).setAction(ACTION_STOP)) } catch (e: RuntimeException) { /* not running */ }
         }
     }
 }

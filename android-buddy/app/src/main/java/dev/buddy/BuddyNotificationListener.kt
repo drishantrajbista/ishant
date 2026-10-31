@@ -17,7 +17,9 @@ class BuddyNotificationListener : NotificationListenerService() {
 
     override fun onListenerDisconnected() = NotificationStore.clear()
 
-    private fun keep(sbn: StatusBarNotification) {
+    private fun keep(sbn: StatusBarNotification) = try { remember(sbn) } catch (e: RuntimeException) { /* a bad notification must never take the listener down */ }
+
+    private fun remember(sbn: StatusBarNotification) {
         if (sbn.packageName == packageName || sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
         val extras = sbn.notification.extras
         val app = try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(sbn.packageName, 0)).toString() } catch (e: Exception) { sbn.packageName }

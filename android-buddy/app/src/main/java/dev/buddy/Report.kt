@@ -14,13 +14,15 @@ class ReportInfo(
     val checks: List<CheckResult>,
     val timing: List<TimingEntry>,
     val lastError: String?,
+    /** The text of crash.log, if any. */
+    val crash: String? = null,
     /** The full key, only used to scrub it out of free text; never printed. */
     val secretToScrub: String = "",
 )
 
 /** Plain text for "Copy report". Contains no API key: just its last 4 characters. */
 fun buildReport(i: ReportInfo): String {
-    fun scrub(s: String) = if (i.secretToScrub.length >= 8) s.replace(i.secretToScrub, maskKey(i.secretToScrub)) else s
+    fun scrub(s: String) = scrubSecrets(if (i.secretToScrub.length >= 8) s.replace(i.secretToScrub, maskKey(i.secretToScrub)) else s)
     return scrub(buildString {
         appendLine("Buddy report")
         appendLine("App version: ${i.version}")
@@ -38,6 +40,7 @@ fun buildReport(i: ReportInfo): String {
         appendLine("Last error: ${i.lastError ?: "(none)"}")
         appendLine()
         appendLine("Timing (last ${i.timing.size}):")
-        append(if (i.timing.isEmpty()) "(nothing yet)" else formatEntries(i.timing))
+        appendLine(if (i.timing.isEmpty()) "(nothing yet)" else formatEntries(i.timing))
+        if (!i.crash.isNullOrBlank()) { appendLine(); appendLine("Last crashes:"); append(i.crash) }
     })
 }

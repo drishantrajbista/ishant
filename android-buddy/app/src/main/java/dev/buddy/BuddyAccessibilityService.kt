@@ -26,15 +26,17 @@ import kotlin.coroutines.resumeWithException
 class BuddyAccessibilityService : AccessibilityService() {
     @Volatile private var lastEventAt = 0L
 
-    override fun onServiceConnected() { instance = this }
+    override fun onServiceConnected() { try { instance = this } catch (e: Throwable) { android.util.Log.e("Buddy", "onServiceConnected", e) } }
 
-    override fun onUnbind(intent: Intent?): Boolean { instance = null; return super.onUnbind(intent) }
+    override fun onUnbind(intent: Intent?): Boolean { instance = null; return try { super.onUnbind(intent) } catch (e: Throwable) { false } }
 
     override fun onDestroy() { instance = null; super.onDestroy() }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) { lastEventAt = SystemClock.uptimeMillis() }
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        try { lastEventAt = SystemClock.uptimeMillis() } catch (e: Throwable) { /* ultra-light and never throws */ }
+    }
 
-    override fun onInterrupt() {}
+    override fun onInterrupt() { try { acted() } catch (e: Throwable) { android.util.Log.e("Buddy", "onInterrupt", e) } }
 
     /** After an action: wait until no window events for 300 ms (at most 2 s) rather than sleeping a fixed time. */
     suspend fun settle() {

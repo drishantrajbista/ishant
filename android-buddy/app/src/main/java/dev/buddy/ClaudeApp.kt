@@ -26,8 +26,8 @@ fun Context.openClaudeInPlayStore() {
     fun view(uri: String) = Intent(Intent.ACTION_VIEW, Uri.parse(uri)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     try {
         startActivity(view("market://details?id=$CLAUDE_PACKAGE"))
-    } catch (e: ActivityNotFoundException) {
-        startActivity(view("https://play.google.com/store/apps/details?id=$CLAUDE_PACKAGE"))
+    } catch (e: RuntimeException) {
+        try { startActivity(view("https://play.google.com/store/apps/details?id=$CLAUDE_PACKAGE")) } catch (e2: RuntimeException) { /* nothing can open a link */ }
     }
 }
 

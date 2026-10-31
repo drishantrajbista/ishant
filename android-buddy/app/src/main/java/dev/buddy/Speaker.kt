@@ -49,18 +49,22 @@ class Speaker(context: Context, private val rate: () -> Float, private val onFin
         main.removeCallbacksAndMessages(null)
         live.clear()
         streamDone = false
-        tts?.stop()
+        try { tts?.stop() } catch (e: RuntimeException) { /* engine gone */ }
     }
 
     fun shutdown() {
         stop()
-        tts?.shutdown()
+        try { tts?.shutdown() } catch (e: RuntimeException) { /* engine gone */ }
         tts = null
     }
 
     private fun enqueue(text: String) {
         val engine = tts ?: return
         if (!ready) return
+        try { speakPieces(engine, text) } catch (e: RuntimeException) { android.util.Log.w("Buddy", "tts", e) }
+    }
+
+    private fun speakPieces(engine: TextToSpeech, text: String) {
         for (piece in stripMarkdown(removeTags(text)).chunked(TextToSpeech.getMaxSpeechInputLength() - 1)) {
             useVoiceFor(engine, piece)
             engine.setSpeechRate(rate())

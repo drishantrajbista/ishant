@@ -40,11 +40,13 @@ class ClipboardActivity : Activity() {
         val clip = (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip
         val text = AnswerInbox.take() ?: clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
         if (BuddyService.running.value) {
-            startService(
-                Intent(this, BuddyService::class.java)
-                    .setAction(BuddyService.ACTION_ANSWER_TEXT)
-                    .putExtra(BuddyService.EXTRA_TEXT, text),
-            )
+            try {
+                startService(
+                    Intent(this, BuddyService::class.java)
+                        .setAction(BuddyService.ACTION_ANSWER_TEXT)
+                        .putExtra(BuddyService.EXTRA_TEXT, text),
+                )
+            } catch (e: RuntimeException) { /* the service is gone */ }
         }
         finish()
         @Suppress("DEPRECATION") overridePendingTransition(0, 0)

@@ -267,7 +267,9 @@ The Play bundle is built with `-PplayStore=true`, which switches the check off.
 Use **Check setup** on the home screen: it tests the mode, your Claude key and network (a tiny live request, with its
 latency), accessibility, a test screenshot and voice, with a fix button for each failure. **Copy report** puts a plain
 text report on the clipboard (version, device, Android, mode, model, voice, check results, the last ~30 timing entries and
-the last error; only the last 4 characters of your key) to paste when asking for help. The home screen also shows the
+the last error; only the last 4 characters of your key) to paste when asking for help. Buddy records its own crashes: the last 3 are kept in the app's private storage (never including an API key) and a
+**Last crash** row with **Copy crash** appears under Troubleshoot; the latest crash is also folded into Copy report. The
+home screen also shows the
 last answer's timing, e.g. "Last answer: 6.2 s (Claude 4.1 s, voice 1.5 s, screen 0.6 s)".
 
 ## Privacy

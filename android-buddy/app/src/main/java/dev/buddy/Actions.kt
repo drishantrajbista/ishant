@@ -24,6 +24,7 @@ import java.time.ZonedDateTime
 private fun Context.start(intent: Intent) {
     try { startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     catch (e: ActivityNotFoundException) { throw ToolError("nothing on this phone can do that") }
+    catch (e: RuntimeException) { throw ToolError("couldn't open that") }   // e.g. SecurityException
 }
 
 fun Context.setAlarm(hour: Int, minute: Int, label: String?) {
@@ -66,10 +67,12 @@ fun Context.mediaKey(action: String): Boolean {
         "playpause" -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
         else -> return false
     }
-    val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
-    am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
-    return true
+    return try {
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+        am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+        true
+    } catch (e: RuntimeException) { false }
 }
 
 fun Context.deviceStatus(): String {
@@ -100,7 +103,7 @@ fun Context.batteryInfo(): Pair<Int?, Boolean> {
 fun Context.hasCalendarPermission() =
     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
 
-fun Context.notificationAccessEnabled() = packageName in NotificationManagerCompat.getEnabledListenerPackages(this)
+fun Context.notificationAccessEnabled() = try { packageName in NotificationManagerCompat.getEnabledListenerPackages(this) } catch (e: RuntimeException) { false }
 
 /** The next [max] events in the coming week (read-only; needs READ_CALENDAR, which the user grants in Buddy's settings). */
 fun Context.upcomingEvents(max: Int): List<CalEvent> {
@@ -111,7 +114,7 @@ fun Context.upcomingEvents(max: Int): List<CalEvent> {
         android.content.ContentUris.appendId(it, now + 7 * 24 * 3600_000L)
     }.build()
     val out = mutableListOf<CalEvent>()
-    contentResolver.query(
+    try { contentResolver.query(
         uri,
         arrayOf(CalendarContract.Instances.TITLE, CalendarContract.Instances.BEGIN, CalendarContract.Instances.END,
             CalendarContract.Instances.EVENT_LOCATION, CalendarContract.Instances.ALL_DAY),
@@ -120,7 +123,7 @@ fun Context.upcomingEvents(max: Int): List<CalEvent> {
         while (c.moveToNext() && out.size < max.coerceIn(1, 20)) {
             out += CalEvent(c.getString(0).orEmpty(), c.getLong(1), c.getLong(2), c.getString(3), c.getInt(4) == 1)
         }
-    }
+    } } catch (e: SecurityException) { throw ToolError("calendar access isn't allowed. ask the user to allow it in buddy's settings") }
     return out
 }
 

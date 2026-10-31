@@ -97,15 +97,25 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
     private var added = false
     private var hiddenForCapture = false
 
-    fun show() {
-        if (added) return
+    /** Adds the bubble's windows. False if Android refuses (e.g. "draw over other apps" was revoked). */
+    fun show(): Boolean {
+        if (added) return true
         val m = context.resources.displayMetrics
         bubbleParams.x = m.widthPixels - size - dp(8f).toInt()
         bubbleParams.y = (m.heightPixels * 0.4f).toInt()
-        wm.addView(textView, textParams)
-        wm.addView(bubble, bubbleParams)
-        added = true
+        return try {
+            wm.addView(textView, textParams)
+            wm.addView(bubble, bubbleParams)
+            added = true
+            true
+        } catch (e: RuntimeException) {   // BadTokenException, SecurityException, IllegalStateException
+            runCatching { wm.removeView(textView) }
+            false
+        }
     }
+
+    /** Window changes can fail if the permission goes away mid-use; that must never crash Buddy. */
+    private inline fun guard(block: () -> Unit) { try { block() } catch (e: RuntimeException) { android.util.Log.w("Buddy", "overlay", e) } }
 
     // --- drag to close: a target fades in at the bottom while the bubble is dragged ---
 
@@ -128,7 +138,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         closeShown = true
         closeParams.y = realSize().second - closeParams.height
         closeView.alpha = 0f
-        wm.addView(closeView, closeParams)
+        guard { wm.addView(closeView, closeParams) }
         closeView.animate().alpha(1f).setDuration(150).start()
     }
 
@@ -138,7 +148,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         snapped = false
         closeView.setActive(false)
         closeView.animate().alpha(0f).setDuration(150).withEndAction {
-            if (closeView.isAttachedToWindow) wm.removeView(closeView)
+            if (closeView.isAttachedToWindow) guard { wm.removeView(closeView) }
         }.start()
     }
 
@@ -153,7 +163,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         }
         if (snapped) { bubbleParams.x = (c.x - size / 2).toInt(); bubbleParams.y = (c.y - size / 2).toInt() }
         else { bubbleParams.x = x; bubbleParams.y = y }
-        wm.updateViewLayout(bubble, bubbleParams)
+        guard { wm.updateViewLayout(bubble, bubbleParams) }
         positionText()
     }
 
@@ -168,7 +178,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
             interpolator = OvershootInterpolator(1.6f)
             addUpdateListener {
                 bubbleParams.x = it.animatedValue as Int
-                if (added) { wm.updateViewLayout(bubble, bubbleParams); positionText() }
+                if (added) { guard { wm.updateViewLayout(bubble, bubbleParams) }; positionText() }
             }
             start()
         }
@@ -208,10 +218,10 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
     fun remove() {
         if (!added) return
         added = false
-        if (closeView.isAttachedToWindow) wm.removeView(closeView)
+        if (closeView.isAttachedToWindow) guard { wm.removeView(closeView) }
         bubble.stop()
-        wm.removeView(bubble)
-        wm.removeView(textView)
+        guard { wm.removeView(bubble) }
+        guard { wm.removeView(textView) }
     }
 
     fun setState(state: BuddyState) = bubble.setState(state)
@@ -229,7 +239,7 @@ class BubbleOverlay(private val context: Context, private val callbacks: Callbac
         if (!added) return
         bubbleParams.flags = if (on) bubbleParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
         else bubbleParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-        wm.updateViewLayout(bubble, bubbleParams)
+        guard { wm.updateViewLayout(bubble, bubbleParams) }
     }
 
     /** Claude's answer is expected: a small pulsing Claude-orange badge. */

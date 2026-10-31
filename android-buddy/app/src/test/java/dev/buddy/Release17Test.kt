@@ -220,3 +220,59 @@ class DesignMathTest {
         assertFalse(keyStatus("sk-ant-api03-abcdef").contains("api03"))
     }
 }
+
+class CrashLogTest {
+    private fun boom(depth: Int = 0): Throwable = if (depth < 40) boom(depth + 1) else IllegalStateException("kaboom: sk-ant-api03-SECRET123 leaked")
+
+    private fun record(error: Throwable = boom()) = formatCrash(
+        "2025-11-03T08:15:00Z", "1.7.1", 13, "samsung SM-S918B", "Android 15 (SDK 35)", "main", error,
+    )
+
+    @Test fun hasEveryField() {
+        val text = record()
+        for (needle in listOf("=== crash ===", "time: 2025-11-03T08:15:00Z", "app: 1.7.1 (13)", "device: samsung SM-S918B",
+            "android: Android 15 (SDK 35)", "thread: main", "exception: java.lang.IllegalStateException: kaboom")) {
+            assertTrue(needle, text.contains(needle))
+        }
+    }
+
+    @Test fun framesAreTrimmedToTwenty() {
+        val frames = record().lines().count { it.startsWith("  at ") }
+        assertEquals(20, frames)
+        assertTrue(record().contains("more"))
+    }
+
+    @Test fun longMessagesAreTrimmedAndCausesIncluded() {
+        val text = record(RuntimeException("x".repeat(1000), IllegalArgumentException("root cause")))
+        assertTrue(text.lines().first { it.startsWith("exception:") }.length < 400)
+        assertTrue(text.contains("caused by: java.lang.IllegalArgumentException: root cause"))
+    }
+
+    @Test fun anAnthropicKeyIsNeverWritten() {
+        val text = record()
+        assertFalse(text.contains("SECRET123"))
+        assertTrue(text.contains("sk-ant-…"))
+        assertEquals("sk-ant-… and sk-ant-…", scrubSecrets("sk-ant-api03-AAA_bb-1 and sk-ant-xyz"))
+    }
+
+    @Test fun onlyTheLastThreeCrashesAreKept() {
+        var log = ""
+        for (i in 1..5) log = appendCrash(log, formatCrash("t$i", "1", 1, "d", "a", "main", RuntimeException("crash $i")))
+        assertEquals(3, Regex("=== crash ===").findAll(log).count())
+        assertFalse(log.contains("crash 2"))
+        assertTrue(log.contains("crash 3") && log.contains("crash 5"))
+        assertTrue(log.indexOf("crash 3") < log.indexOf("crash 5"))
+    }
+
+    @Test fun reportsIncludeTheCrashButNeverAKey() {
+        val key = "sk-ant-api03-REALKEYREALKEY-9z9z"
+        val crash = formatCrash("t", "1.7.1", 13, "d", "a", "main", RuntimeException("failed with $key"))
+        val text = buildReport(
+            ReportInfo("1.7.1", "dev", "Android 15", "CLAUDE", "m", "PHONE", maskKey(key), emptyList(), emptyList(), "error $key", crash, key),
+        )
+        assertTrue(text.contains("Last crashes:"))
+        assertTrue(text.contains("failed with"))
+        assertFalse(text.contains("REALKEYREALKEY"))
+        assertFalse(text.contains(key))
+    }
+}

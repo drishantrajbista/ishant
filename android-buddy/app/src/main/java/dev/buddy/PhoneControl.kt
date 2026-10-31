@@ -231,6 +231,8 @@ class PhoneControl(private val context: Context, private val stage: Stage) : Pho
             context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (e: android.content.ActivityNotFoundException) {
             throw ToolError("nothing on this phone can open that")
+        } catch (e: RuntimeException) {
+            throw ToolError("couldn't open that")   // e.g. SecurityException
         }
         a11y?.acted()
     }
