@@ -1,11 +1,17 @@
 package dev.buddy
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
 import org.json.JSONObject
@@ -28,7 +34,14 @@ class EmptyReplyException(reason: String?) :
 /** Claude refused. */
 class DeclinedException : SpokenException("claude declined to answer that")
 
+/**
+ * One client for every request. HTTP/2 over TLS (falling back to HTTP/1.1) lets the warm-up GET on touch-down, the request
+ * itself and each following agent turn share one connection, and a small pool keeps it open between turns.
+ */
 internal val sharedHttp: OkHttpClient = OkHttpClient.Builder()
+    .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+    .connectionPool(ConnectionPool(3, 5, TimeUnit.MINUTES))
+    .retryOnConnectionFailure(true)
     .connectTimeout(20, TimeUnit.SECONDS)
     .readTimeout(90, TimeUnit.SECONDS)
     .build()
@@ -40,6 +53,27 @@ private fun apiError(r: Response): ApiException {
     val raw = r.body?.string().orEmpty()
     val detail = try { JSONObject(raw).getJSONObject("error").getString("message") } catch (e: Exception) { raw }
     return ApiException(r.code, "API error ${r.code}: ${detail.replace(Regex("\\s+"), " ").trim().take(150)}", raw)
+}
+
+/** Executes [request] and emits the payload of every SSE `data:` line. Cancelling the collector cancels the call. */
+internal fun sseData(request: Request): Flow<String> = channelFlow {
+    val call = sharedHttp.newCall(request)
+    // A blocking socket read can't be cancelled by coroutines, so close the call the moment the collector goes away.
+    val closer = launch(Dispatchers.IO) { try { awaitCancellation() } finally { call.cancel() } }
+    try {
+        withContext(Dispatchers.IO) {
+            call.execute().use { response ->
+                if (!response.isSuccessful) throw apiError(response)
+                val source = response.body!!.source()
+                while (true) {
+                    val line = source.readUtf8Line() ?: break
+                    if (line.startsWith("data:")) line.removePrefix("data:").trim().takeIf { it.isNotEmpty() }?.let { send(it) }
+                }
+            }
+        }
+    } finally {
+        closer.cancel()
+    }
 }
 
 /** A plain (non-streaming) request whose response is a JSON object. Cancellable. */

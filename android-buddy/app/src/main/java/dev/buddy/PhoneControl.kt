@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.content.pm.PackageManager
+import android.os.SystemClock
 import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
@@ -27,7 +28,7 @@ interface Stage {
 
 private val SCREEN_CHANGING = setOf(
     "left_click", "double_click", "right_click", "left_click_drag", "scroll", "type", "key",
-    "open_app", "open_url", "open_settings", "android_nav", "web_search", "create_event",
+    "open_app", "open_url", "open_settings", "android_nav", "web_search", "create_event", "scroll_to_text", "wait_for",
 )
 
 /** Carries out Claude's tool calls on the real phone through [BuddyAccessibilityService]. */
@@ -41,6 +42,7 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
     private var elements: List<UiElement> = emptyList()
     private var cursor: Pt? = null                     // display px
     private var lastTap: Pair<Int, Int>? = null        // display px
+    private val screens = ScreenWatcher()              // notices an action that changed nothing
 
     private val a11y get() = BuddyAccessibilityService.instance
     private fun hands(): BuddyAccessibilityService =
@@ -60,7 +62,9 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
         val m = ScreenMap(shot.width, shot.height, shot.displayWidth, shot.displayHeight)
         map = m
         elements = a11y?.elements(shot.width.toFloat() / shot.displayWidth, shot.height.toFloat() / shot.displayHeight).orEmpty()
-        return Observation(shot, formatElements(elements))
+        val list = formatElements(elements)
+        screens.changed(list)   // the baseline the next post-action list is compared with
+        return Observation(shot, list)
     }
 
     /** After a batch that changed the screen: wait for it to settle and hand Claude the fresh element list as text. */
@@ -70,8 +74,13 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
         val m = map ?: return null
         TimingLog.time("settle") { hands.settle() }
         elements = hands.elements(m.shotW.toFloat() / m.displayW, m.shotH.toFloat() / m.displayH)
-        return "screen now:\n" + formatElements(elements)
+        val list = formatElements(elements)
+        // Same list as before the action: say so, so the model tries something else instead of repeating itself.
+        return (if (screens.changed(list)) "" else "$UNCHANGED_NOTE\n") + "screen now:\n" + list
     }
+
+    override suspend fun currentScreen(): String? =
+        BuddyAccessibilityService.foregroundPackage?.takeIf { it != context.packageName }?.let { context.appLabel(it) }
 
     override suspend fun run(use: ToolUse, status: (String) -> Unit): List<JSONObject> {
         shotResult = null
@@ -81,9 +90,11 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
 
     private suspend fun custom(use: ToolUse) {
         when (use.name) {
-            "open_app" -> openApp(use.input.optString("name"))
-            "open_url" -> openUrl(use.input.optString("url"))
-            "open_settings" -> openSettings(use.input.optString("page"), use.input.optString("package"))
+            "open_app" -> opening { openApp(use.input.optString("name")) }
+            "open_url" -> opening { openUrl(use.input.optString("url")) }
+            "open_settings" -> opening { openSettings(use.input.optString("page"), use.input.optString("package")) }
+            "scroll_to_text" -> scrollToText(use.input.optString("text"))
+            "wait_for" -> waitFor(use.input.optString("text"), use.input.optDouble("seconds", Double.NaN))
             "set_alarm" -> {
                 val h = use.input.optInt("hour", -1); val m = use.input.optInt("minute", -1)
                 stage.status("setting an alarm")
@@ -100,7 +111,7 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
                 val start = parseIso(use.input.optString("start_iso"), zone) ?: throw ToolError("start_iso must be an ISO date-time like 2025-11-03T15:00")
                 val end = use.input.optString("end_iso").takeIf { it.isNotBlank() }?.let { parseIso(it, zone) } ?: (start + 3600_000L)
                 stage.status("opening the calendar")
-                context.insertEvent(use.input.optString("title"), start, end, use.input.optString("location"))
+                opening { context.insertEvent(use.input.optString("title"), start, end, use.input.optString("location")) }
                 shotResult = listOf(AgentJson.text("the calendar is open with the event filled in; the user confirms it there"))
             }
             "read_calendar" -> {
@@ -123,7 +134,7 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
             "save_screenshot" -> { stage.status("saving a screenshot"); shotResult = listOf(AgentJson.text(stage.saveScreenshot())) }
             "default_apps" -> shotResult = listOf(AgentJson.text(formatDefaultApps(context.defaultApps())))
             "device_status" -> shotResult = listOf(AgentJson.text(context.deviceStatus()))
-            "web_search" -> { stage.status("searching"); context.webSearch(use.input.optString("query")); a11y?.acted() }
+            "web_search" -> { stage.status("searching"); opening { context.webSearch(use.input.optString("query")); a11y?.acted() } }
             "list_apps" -> {
                 stage.status("looking at your apps")
                 shotResult = listOf(AgentJson.text(context.launchableApps().keys.sorted().take(300).joinToString(", ").ifEmpty { "none" }))
@@ -131,7 +142,7 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
             "android_nav" -> {
                 val action = use.input.optString("action")
                 stage.status(action.replace('_', ' '))
-                if (!hands().nav(action)) throw ToolError("couldn't do $action")
+                opening { if (!hands().nav(action)) throw ToolError("couldn't do $action") }
                 a11y?.acted()
             }
             else -> throw ToolError("unknown tool ${use.name}")
@@ -173,6 +184,43 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
             "wait" -> { stage.status("waiting"); delay((input.optDouble("duration", 1.0).coerceIn(0.0, 5.0) * 1000).toLong()) }
             else -> throw ToolError("${use.name} isn't available on a phone")
         }
+    }
+
+    /** Launching another screen: wait for its window to come to the front (at most 1.2 s) instead of a fixed pause. */
+    private suspend fun opening(block: suspend () -> Unit) {
+        val since = SystemClock.uptimeMillis()
+        block()
+        a11y?.awaitWindowChange(since)
+    }
+
+    /** `scroll_to_text`: scrolls until an item containing the text is on screen and says where (screenshot pixels). */
+    private suspend fun scrollToText(text: String) {
+        if (text.isBlank()) throw ToolError("give the text to look for")
+        val m = map ?: throw ToolError("take a screenshot first")
+        stage.status("looking for \"${text.take(24)}\"")
+        val find = hands().scrollToText(text)
+        val scrolled = if (find.scrolls == 1) "1 scroll" else "${find.scrolls} scrolls"
+        shotResult = listOf(AgentJson.text(
+            if (find.found) "found \"$text\" at (${find.x * m.shotW / m.displayW},${find.y * m.shotH / m.displayH})" +
+                if (find.scrolls > 0) " after $scrolled" else " (already on screen)"
+            else "didn't find \"$text\" after $scrolled. it may not be on this screen, or may be further along: scroll more or try other words",
+        ))
+    }
+
+    /** `wait_for`: waits for text to appear (or the screen to change) for up to `seconds` (default 4, at most 8). */
+    private suspend fun waitFor(text: String, seconds: Double) {
+        val hands = hands()
+        val limit = (if (seconds.isNaN()) 4.0 else seconds).coerceIn(0.5, 8.0)
+        stage.status(if (text.isBlank()) "waiting" else "waiting for \"${text.take(24)}\"")
+        val t0 = SystemClock.uptimeMillis()
+        val ok = hands.waitForText(text.takeIf { it.isNotBlank() }, (limit * 1000).toLong())
+        val took = "%.1f".format((SystemClock.uptimeMillis() - t0) / 1000.0)
+        shotResult = listOf(AgentJson.text(when {
+            text.isBlank() && ok -> "the screen changed after $took s"
+            text.isBlank() -> "the screen didn't change in $took s"
+            ok -> "\"$text\" appeared after $took s"
+            else -> "\"$text\" didn't appear within $took s"
+        }))
     }
 
     // The blocks for the tool call being run, when it isn't a plain "OK".

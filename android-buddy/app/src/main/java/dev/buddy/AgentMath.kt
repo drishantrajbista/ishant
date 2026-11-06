@@ -1,34 +1,54 @@
 package dev.buddy
 
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.hypot
 
-/** One thing on screen worth telling Claude about; x,y is its centre in screenshot pixels. */
-data class UiElement(val role: String, val label: String, val x: Int, val y: Int, val state: String? = null)
+/**
+ * One thing on screen worth telling Claude about; x,y is its centre in screenshot pixels. [state] lists what is set, comma
+ * separated (checked or unchecked, disabled, selected, focused); [scrollable] says it scrolls; [pkg] is the app it belongs to.
+ */
+data class UiElement(
+    val role: String, val label: String, val x: Int, val y: Int,
+    val state: String? = null, val scrollable: Boolean = false, val pkg: String? = null,
+)
 
-const val MAX_ELEMENTS = 50
+const val MAX_ELEMENTS = 60
 private const val MAX_LABEL = 40
 
-/** `[7] button "Display" at (540,410)`, one element per line (at most [MAX_ELEMENTS]). */
+/**
+ * `[7] switch "Wi-Fi" (checked, focused) at (540,410) scrollable pkg=com.android.settings`, one element per line (at most
+ * [MAX_ELEMENTS], labels 40 characters). The package is only written when it changes from the line above.
+ */
 fun formatElements(elements: List<UiElement>): String =
     if (elements.isEmpty()) "(no readable elements)"
-    else elements.take(MAX_ELEMENTS).mapIndexed { i, e ->
-        val label = e.label.replace(Regex("\\s+"), " ").replace('"', '\'').trim()
-            .let { if (it.length > MAX_LABEL) it.take(MAX_LABEL) + "…" else it }
-        buildString {
-            append("[${i + 1}] ${e.role}")
-            if (label.isNotEmpty()) append(" \"$label\"")
-            e.state?.let { append(" ($it)") }
-            append(" at (${e.x},${e.y})")
-        }
-    }.joinToString("\n")
+    else {
+        var lastPkg: String? = null
+        elements.take(MAX_ELEMENTS).mapIndexed { i, e ->
+            val label = e.label.replace(Regex("\\s+"), " ").replace('"', '\'').trim()
+                .let { if (it.length > MAX_LABEL) it.take(MAX_LABEL) + "…" else it }
+            buildString {
+                append("[${i + 1}] ${e.role}")
+                if (label.isNotEmpty()) append(" \"$label\"")
+                e.state?.let { append(" ($it)") }
+                append(" at (${e.x},${e.y})")
+                if (e.scrollable && e.role != "scrollable") append(" scrollable")
+                if (e.pkg != null && e.pkg != lastPkg) append(" pkg=${e.pkg}")
+                if (e.pkg != null) lastPkg = e.pkg
+            }
+        }.joinToString("\n")
+    }
 
-fun roleOf(className: String?, clickable: Boolean, editable: Boolean, scrollable: Boolean, checkable: Boolean, password: Boolean): String {
+fun roleOf(
+    className: String?, clickable: Boolean, editable: Boolean, scrollable: Boolean, checkable: Boolean, password: Boolean,
+    link: Boolean = false,
+): String {
     val c = className.orEmpty()
     return when {
         password -> "password field"
         editable -> "input"
         checkable -> if (c.contains("CheckBox")) "checkbox" else "switch"
+        link -> "link"
         c.endsWith("Button") || clickable -> "button"
         scrollable -> "scrollable"
         c.endsWith("ImageView") -> "image"
@@ -212,6 +232,60 @@ fun effortFor(freshConversation: Boolean, current: String, transcript: String, t
     if (freshConversation) chooseEffort(transcript, thinkDeeper) else current
 
 /** The detail of a "claude" timing entry, which Copy report shows: `38 KB, effort low, HTTP 200`. */
-fun requestDetail(sizeKb: Int, effort: String, status: String) = "$sizeKb KB, effort $effort, HTTP $status"
+fun requestDetail(sizeKb: Int, effort: String, status: String, mode: String = "") =
+    "$sizeKb KB, effort $effort" + (if (mode.isEmpty()) "" else ", $mode") + ", HTTP $status"
+
+// endregion
+
+// region steadier multi-step control
+
+/** Lowercase, with runs of whitespace as one space: how node text and a search are compared. */
+fun normalizeText(s: String?): String = s.orEmpty().lowercase().replace(Regex("\\s+"), " ").trim()
+
+/** True if a node's text or content description contains [query] (case-insensitive); a blank query matches nothing. */
+fun textMatches(text: String?, description: String?, query: String): Boolean {
+    val q = normalizeText(query)
+    return q.isNotEmpty() && (normalizeText(text).contains(q) || normalizeText(description).contains(q))
+}
+
+/** Runs [block]; if it reports failure, waits [waitMs] and runs it once more (a tap that was cancelled gets one more go). */
+suspend fun retryOnce(waitMs: Long, block: suspend () -> Boolean): Boolean {
+    if (block()) return true
+    delay(waitMs)
+    return block()
+}
+
+const val WINDOW_WAIT_MS = 1200L
+
+/** After launching another screen: done once a window-state-changed event has arrived since [since], or [maxMs] have passed. */
+fun windowWaitDone(lastChangeAt: Long, since: Long, now: Long, maxMs: Long = WINDOW_WAIT_MS): Boolean =
+    lastChangeAt >= since || now - since >= maxMs
+
+/** Remembers the last element list so an action that changed nothing can be noticed (and the model told to try something else). */
+class ScreenWatcher {
+    private var last: String? = null
+
+    /** Records [list]; true if it differs from the previous one (the first one always does). */
+    fun changed(list: String): Boolean {
+        val differs = list != last
+        last = list
+        return differs
+    }
+}
+
+const val UNCHANGED_NOTE = "the screen didn't change after that. don't repeat the same action: scroll or use scroll_to_text to bring " +
+    "the target into view, wait_for a screen that's still loading, or try a different target."
+
+/** What is spoken when the turn cap is hit: where it stopped ([screen]: the app in front) and what it was doing last. */
+fun turnCapMessage(screen: String?, lastStatus: String?): String {
+    val where = screen?.trim()?.takeIf { it.isNotEmpty() }
+    val doing = lastStatus?.trim()?.takeIf { it.isNotEmpty() }
+    return "that took too many steps, i stopped" + when {
+        where != null && doing != null -> " at $where after $doing"
+        where != null -> " at $where"
+        doing != null -> " after $doing"
+        else -> ""
+    }
+}
 
 // endregion

@@ -72,6 +72,11 @@ object AgentJson {
             .put(custom("remember", "Save one short note about a stable preference or phrasing habit of the user (never passwords, codes, card numbers or other sensitive data; never one-off facts).",
                 JSONObject().put("note", prop("string", "a short note, at most 120 characters")), listOf("note")))
             .put(custom("save_screenshot", "Save a screenshot of the current screen to the phone's gallery.", JSONObject(), emptyList()))
+            .put(custom("scroll_to_text", "Scroll the screen until an item whose text or description contains the given text is visible, and say where it is. Use it to reach an item that is off screen.",
+                JSONObject().put("text", prop("string", "text (or part of it) of the item to bring into view")), listOf("text")))
+            .put(custom("wait_for", "Wait for a screen that is still loading: until an item containing the text appears, or (with no text) until the screen changes, for up to the given seconds.",
+                JSONObject().put("text", prop("string", "text (or part of it) to wait for; leave out to wait for any change"))
+                    .put("seconds", prop("number", "how long to wait at most, default 4, at most 8")), emptyList()))
             .put(custom("web_search", "Search the web in the browser.", JSONObject().put("query", prop("string", "what to search for")), listOf("query")))
             .put(custom(
                 "android_nav", "Android system navigation.",
@@ -94,10 +99,11 @@ object AgentJson {
     }
 
     /** Non-streaming request. [messages] is passed as is: it is append-only. */
-    fun request(model: String, system: String, messages: JSONArray, effort: String = "low"): JSONObject {
+    fun request(model: String, system: String, messages: JSONArray, effort: String = "low", stream: Boolean = false): JSONObject {
         val body = JSONObject()
             .put("model", model)
             .put("max_tokens", 4096)
+            .apply { if (stream) put("stream", true) }
             .put("output_config", JSONObject().put("effort", effort))
             .put("cache_control", JSONObject().put("type", "ephemeral"))   // automatic prompt caching
             .put("system", system)
@@ -111,7 +117,10 @@ object AgentJson {
 
     fun toolUses(content: JSONArray): List<ToolUse> = (0 until content.length()).map { content.getJSONObject(it) }
         .filter { it.optString("type") == "tool_use" }
-        .map { ToolUse(it.getString("id"), it.getString("name"), it.str("toolset_name"), it.optJSONObject("input") ?: JSONObject()) }
+        .map(::toolUse)
+
+    /** The call a `tool_use` content block makes. */
+    fun toolUse(block: JSONObject) = ToolUse(block.getString("id"), block.getString("name"), block.str("toolset_name"), block.optJSONObject("input") ?: JSONObject())
 
     fun textOf(content: JSONArray): String = (0 until content.length()).map { content.getJSONObject(it) }
         .filter { it.optString("type") == "text" }.joinToString(" ") { it.optString("text") }.trim()

@@ -25,6 +25,8 @@ import kotlin.coroutines.resumeWithException
 /** Claude's eyes and hands: reads the screen, takes screenshots (Android 11+), taps, swipes and types. */
 class BuddyAccessibilityService : AccessibilityService() {
     @Volatile private var lastEventAt = 0L
+    /** When another app's window last came to the front (window-state-changed events; Buddy's own overlays don't count). */
+    @Volatile private var lastWindowChangeAt = 0L
 
     override fun onServiceConnected() { try { instance = this } catch (e: Throwable) { android.util.Log.e("Buddy", "onServiceConnected", e) } }
 
@@ -35,21 +37,29 @@ class BuddyAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         try {
             lastEventAt = SystemClock.uptimeMillis()
-            if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) event.packageName?.toString()?.let { foregroundPackage = it }
+            if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) event.packageName?.toString()?.let {
+                foregroundPackage = it
+                if (it != packageName) lastWindowChangeAt = SystemClock.uptimeMillis()
+            }
         } catch (e: Throwable) { /* ultra-light and never throws */ }
     }
 
     override fun onInterrupt() { try { acted() } catch (e: Throwable) { android.util.Log.e("Buddy", "onInterrupt", e) } }
 
-    /** After an action: wait until no window events for 300 ms (at most 2 s) rather than sleeping a fixed time. */
-    suspend fun settle() {
+    /** After an action: wait until no window events for 250 ms (at most [maxMs], 1 s by default) rather than sleeping a fixed time. */
+    suspend fun settle(maxMs: Long = SETTLE_MAX_MS) {
         val start = SystemClock.uptimeMillis()
         while (true) {
             val now = SystemClock.uptimeMillis()
             val quiet = now - lastEventAt
-            if (quiet >= QUIET_MS || now - start >= SETTLE_MAX_MS) return
+            if (quiet >= QUIET_MS || now - start >= maxMs) return
             delay(minOf(QUIET_MS - quiet, 50))
         }
+    }
+
+    /** After launching another screen (an app, a Settings page, a navigation): wait up to 1.2 s for its window to come to the front instead of sleeping. */
+    suspend fun awaitWindowChange(since: Long) {
+        while (!windowWaitDone(lastWindowChangeAt, since, SystemClock.uptimeMillis())) delay(25)
     }
 
     fun acted() { lastEventAt = SystemClock.uptimeMillis() }
@@ -89,7 +99,11 @@ class BuddyAccessibilityService : AccessibilityService() {
 
     // region gestures
 
+    /** A cancelled (or refused) gesture gets one more try after 150 ms before it counts as failed. */
     private suspend fun gesture(vararg strokes: GestureDescription.StrokeDescription): Boolean =
+        retryOnce(GESTURE_RETRY_MS) { dispatchOnce(*strokes) }
+
+    private suspend fun dispatchOnce(vararg strokes: GestureDescription.StrokeDescription): Boolean =
         suspendCancellableCoroutine { cont ->
             val g = GestureDescription.Builder().apply { strokes.forEach(::addStroke) }.build()
             val sent = dispatchGesture(g, object : GestureResultCallback() {
@@ -195,6 +209,105 @@ class BuddyAccessibilityService : AccessibilityService() {
 
     // endregion
 
+    // region finding text, scrolling to it and waiting for it
+
+    /** A node whose text or description contains a search; [x],[y] are its centre in display pixels (clipped to the screen). */
+    class TextHit(val x: Int, val y: Int, val visible: Boolean, val node: AccessibilityNodeInfo)
+
+    /** What [scrollToText] found: the centre in display pixels, and how many scrolls it took. */
+    class TextFind(val found: Boolean, val x: Int, val y: Int, val scrolls: Int)
+
+    /** The first node (on screen, else off screen but laid out) whose text or description contains [query]. Password fields never match. */
+    fun findText(query: String): TextHit? {
+        val root = rootInActiveWindow ?: return null
+        val m = resources.displayMetrics
+        var onScreen: TextHit? = null
+        var offScreen: TextHit? = null
+        val r = Rect()
+        fun walk(n: AccessibilityNodeInfo) {
+            if (onScreen != null) return
+            if (!n.isPassword && textMatches(n.text?.toString(), n.contentDescription?.toString(), query)) {
+                n.getBoundsInScreen(r)
+                val clipped = Rect(r).takeIf { it.intersect(0, 0, m.widthPixels, m.heightPixels) } ?: Rect()
+                val visible = n.isVisibleToUser && !clipped.isEmpty
+                val hit = TextHit(clipped.centerX().takeIf { visible } ?: r.centerX(), clipped.centerY().takeIf { visible } ?: r.centerY(), visible, n)
+                if (visible) onScreen = hit else if (offScreen == null) offScreen = hit
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let(::walk)
+        }
+        walk(root)
+        return onScreen ?: offScreen
+    }
+
+    private fun mainScrollable(): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        var best: AccessibilityNodeInfo? = null
+        var bestArea = 0L
+        val r = Rect()
+        fun walk(n: AccessibilityNodeInfo) {
+            if (n.isScrollable && n.isVisibleToUser) {
+                n.getBoundsInScreen(r)
+                val area = r.width().toLong() * r.height()
+                if (area > bestArea) { best = n; bestArea = area }
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let(::walk)
+        }
+        walk(root)
+        return best
+    }
+
+    /** Scrolls the biggest scrollable area one page. False if there is none or it can't go that way. */
+    private fun scrollOnce(forward: Boolean): Boolean =
+        mainScrollable()?.performAction(if (forward) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) == true
+
+    private fun screenSignature() = formatElements(elements(1f, 1f))
+
+    /**
+     * Brings the first node containing [query] into view: asks the system to show it if it is laid out off screen, else
+     * scrolls forward (up to [maxScrolls] pages, stopping at the end of the list), then back if it hit the end first.
+     */
+    suspend fun scrollToText(query: String, maxScrolls: Int = SCROLL_TO_TEXT_MAX): TextFind {
+        var scrolls = 0
+        findText(query)?.let { hit ->
+            if (hit.visible) return TextFind(true, hit.x, hit.y, 0)
+            if (hit.node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id)) {
+                acted(); settle()
+                findText(query)?.takeIf { it.visible }?.let { return TextFind(true, it.x, it.y, 0) }
+            }
+        }
+        for (forward in booleanArrayOf(true, false)) {
+            var reachedEnd = false
+            var n = 0
+            while (n < maxScrolls) {
+                val before = screenSignature()
+                if (!scrollOnce(forward)) { reachedEnd = true; break }
+                n++; scrolls++
+                acted(); settle()
+                findText(query)?.takeIf { it.visible }?.let { return TextFind(true, it.x, it.y, scrolls) }
+                if (screenSignature() == before) { reachedEnd = true; break }   // nothing moved: that's the end of the list
+            }
+            if (!reachedEnd) break   // out of scrolls, not out of list: don't walk back over it
+        }
+        return TextFind(false, 0, 0, scrolls)
+    }
+
+    /**
+     * Waits for a node containing [text] to be on screen (true) or [maxMs] to pass (false). With no text it waits for the
+     * screen to change and settle, or for the time to pass.
+     */
+    suspend fun waitForText(text: String?, maxMs: Long): Boolean {
+        val deadline = SystemClock.uptimeMillis() + maxMs
+        val before = if (text.isNullOrBlank()) screenSignature() else null
+        while (true) {
+            if (before == null) { if (findText(text.orEmpty())?.visible == true) return true }
+            else if (screenSignature() != before) { settle(); return true }
+            if (SystemClock.uptimeMillis() >= deadline) return false
+            delay(WAIT_POLL_MS)
+        }
+    }
+
+    // endregion
+
     /** Visible things worth telling Claude about, centres scaled to screenshot pixels by [sx]/[sy]. Never password text. */
     fun elements(sx: Float, sy: Float): List<UiElement> {
         val root = rootInActiveWindow ?: return emptyList()
@@ -208,17 +321,23 @@ class BuddyAccessibilityService : AccessibilityService() {
                 val interactive = n.isClickable || n.isEditable || n.isScrollable || n.isCheckable
                 if (!r.isEmpty && (interactive || text != null || desc != null)) {
                     val label = if (n.isPassword) "" else text ?: desc ?: n.viewIdResourceName?.substringAfterLast('/').orEmpty()
-                    val state = if (n.isCheckable) (if (n.isChecked) "on" else "off") else null
+                    val link = n.extras?.getCharSequence(ROLE_DESCRIPTION)?.toString().equals("link", ignoreCase = true)
+                    val state = buildList {
+                        if (n.isCheckable) add(if (n.isChecked) "checked" else "unchecked")
+                        if (!n.isEnabled) add("disabled")
+                        if (n.isSelected) add("selected")
+                        if (n.isFocused) add("focused")
+                    }.joinToString(", ").ifEmpty { null }
                     found += interactive to UiElement(
-                        roleOf(n.className?.toString(), n.isClickable, n.isEditable, n.isScrollable, n.isCheckable, n.isPassword),
-                        label, (r.exactCenterX() * sx).toInt(), (r.exactCenterY() * sy).toInt(), state,
+                        roleOf(n.className?.toString(), n.isClickable, n.isEditable, n.isScrollable, n.isCheckable, n.isPassword, link),
+                        label, (r.exactCenterX() * sx).toInt(), (r.exactCenterY() * sy).toInt(), state, n.isScrollable, n.packageName?.toString(),
                     )
                 }
             }
             for (i in 0 until n.childCount) n.getChild(i)?.let(::walk)
         }
         walk(root)
-        // At most 50: interactive ones first, then back in reading order.
+        // At most MAX_ELEMENTS: interactive ones first, then back in reading order.
         return (found.filter { it.first } + found.filter { !it.first }).take(MAX_ELEMENTS).map { it.second }.sortedWith(compareBy({ it.y }, { it.x }))
     }
 
@@ -228,6 +347,10 @@ class BuddyAccessibilityService : AccessibilityService() {
         @Volatile var foregroundPackage: String? = null
         private const val QUIET_MS = 250L
         private const val SETTLE_MAX_MS = 1000L
+        private const val GESTURE_RETRY_MS = 150L
+        private const val SCROLL_TO_TEXT_MAX = 6
+        private const val WAIT_POLL_MS = 150L
+        private const val ROLE_DESCRIPTION = "AccessibilityNodeInfo.roleDescription"
         private const val TOO_SOON = 3      // ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT
         private const val SECURE_WINDOW = 5 // ERROR_TAKE_SCREENSHOT_SECURE_WINDOW
 

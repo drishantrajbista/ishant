@@ -28,7 +28,7 @@ class AgentJsonTest {
 
     @Test fun customToolsAreStrictOnlyWhenTheyHaveProperties() {
         val tools = AgentJson.tools()
-        assertEquals(19, tools.length())
+        assertEquals(21, tools.length())
         for (i in 1 until tools.length()) {
             val t = tools.getJSONObject(i)
             val schema = t.getJSONObject("input_schema")
@@ -39,15 +39,15 @@ class AgentJsonTest {
                 assertTrue(JSONObject("""{"type":"object","properties":{},"additionalProperties":false}""").similar(schema))
             } else assertTrue(t.getString("name"), t.getBoolean("strict"))
         }
-        val nav = tools.getJSONObject(18).getJSONObject("input_schema").getJSONObject("properties").getJSONObject("action")
+        val nav = tools.getJSONObject(20).getJSONObject("input_schema").getJSONObject("properties").getJSONObject("action")
         assertEquals(setOf("back", "home", "recents", "notifications", "quick_settings"), (0 until 5).map { nav.getJSONArray("enum").getString(it) }.toSet())
     }
 
     @Test fun toolsAreDeclaredInOrder() {
-        val names = (0 until 19).map { AgentJson.tools().getJSONObject(it).let { t -> t.optString("name").ifEmpty { t.getString("type") } } }
+        val names = (0 until 21).map { AgentJson.tools().getJSONObject(it).let { t -> t.optString("name").ifEmpty { t.getString("type") } } }
         assertEquals(
             listOf("computer_toolset_20260801", "open_app", "open_url", "open_settings", "list_apps", "set_alarm", "set_timer", "create_event",
-                "read_calendar", "read_notifications", "media", "torch", "volume", "device_status", "default_apps", "remember", "save_screenshot", "web_search", "android_nav"),
+                "read_calendar", "read_notifications", "media", "torch", "volume", "device_status", "default_apps", "remember", "save_screenshot", "scroll_to_text", "wait_for", "web_search", "android_nav"),
             names,
         )
         assertEquals(17, AgentJson.SETTINGS_PAGES.size)
@@ -185,10 +185,10 @@ class PhoneMathTest {
         assertEquals("[1] text \"a b 'c'\" at (1,2)", formatElements(listOf(UiElement("text", "a\n b  \"c\"", 1, 2))))
     }
 
-    @Test fun listIsCappedAtFifty() {
+    @Test fun listIsCappedAtSixty() {
         val lines = formatElements((1..80).map { UiElement("text", "t$it", it, it) }).lines()
-        assertEquals(50, lines.size)
-        assertTrue(lines.last().startsWith("[50] "))
+        assertEquals(60, lines.size)
+        assertTrue(lines.last().startsWith("[60] "))
         assertEquals("(no readable elements)", formatElements(emptyList()))
     }
 

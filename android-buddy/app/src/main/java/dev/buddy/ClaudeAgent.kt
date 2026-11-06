@@ -1,6 +1,8 @@
 package dev.buddy
 
 import android.os.SystemClock
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.buffer
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -18,17 +20,23 @@ interface Phone {
     suspend fun run(use: ToolUse, status: (String) -> Unit): List<JSONObject>
     /** Text to append to the batch's last result (the screen's new element list), when the batch changed the screen. */
     suspend fun afterBatch(last: ToolUse): String?
+    /** The screen in front, in a few words (the app's name), for saying where a stopped task ended. */
+    suspend fun currentScreen(): String? = null
 }
 
 /**
- * Claude API mode as an agent: a non-streaming Messages API loop with the official computer toolset plus open_app and
- * android_nav. The message list is strictly append-only (every response's `content` is echoed back untouched, thinking
- * blocks and signatures included) and survives between holds until it is 10 minutes idle or 40 messages long.
+ * Claude API mode as an agent: a streaming Messages API loop with the official computer toolset plus Buddy's own tools.
+ * Each tool call starts as soon as its block has streamed in, while later blocks are still arriving. The message list is
+ * strictly append-only (every response's `content`, rebuilt from the stream exactly as a plain response carries it, is echoed
+ * back untouched, thinking blocks and signatures included) and survives between holds until it is 10 minutes idle or 40
+ * messages long. If a stream turns out to be unreadable before any tool ran, the turn is repeated as a plain request and plain
+ * requests are used from then on.
  */
 class ClaudeAgent(private val settings: Settings, private val phoneContext: () -> String = { "" }) {
     private var messages = JSONArray()
     private var lastAt = 0L
     private var effort = "low"   // chosen when a conversation starts and kept for all of its requests
+    private var streaming = true  // false after a stream we couldn't read: plain requests from then on
 
     /** True if the last request ran anything but looking tools: an action, not just an answer. */
     var acted = false
@@ -55,37 +63,59 @@ class ClaudeAgent(private val settings: Settings, private val phoneContext: () -
             .put(AgentJson.image(first.shot.jpeg))
         messages.put(AgentJson.user(content))
 
+        // Where it stopped if the turn cap is hit: the last thing it was doing (never the "thinking" between steps).
+        var lastDoing: String? = null
+        val track: (String) -> Unit = { if (it != "thinking") lastDoing = it; status(it) }
+
         repeat(turnCap(settings.claudeModel)) {
             status("thinking")
-            val response = post()
-            val reply = response.getJSONArray("content")
-            messages.put(JSONObject().put("role", "assistant").put("content", reply))
+            val turn = takeTurn(phone, track)
+            messages.put(JSONObject().put("role", "assistant").put("content", turn.content))
             lastAt = SystemClock.elapsedRealtime()
-            val stop = response.str("stop_reason")
-            if (stop == "refusal") throw DeclinedException()
-            val uses = AgentJson.toolUses(reply)
-            if (uses.isEmpty()) {
-                return AgentJson.textOf(reply).ifBlank { throw EmptyReplyException(stop) }
+            if (turn.acted) acted = true
+            if (turn.stopReason == "refusal") throw DeclinedException()
+            if (turn.uses.isEmpty()) {
+                return AgentJson.textOf(turn.content).ifBlank { throw EmptyReplyException(turn.stopReason) }
             }
-            val results = JSONArray()
-            var failed = false
-            for (use in uses) {
-                if (failed) { results.put(AgentJson.result(use, null, AgentJson.HALT)); continue }
-                try {
-                    if (isActionTool(use.name)) acted = true
-                    results.put(AgentJson.result(use, phone.run(use, status), null))
-                } catch (e: ToolError) {
-                    failed = true
-                    results.put(AgentJson.result(use, null, e.message ?: "failed"))
-                }
-            }
-            if (!failed) phone.afterBatch(uses.last())?.let { fresh ->
+            if (!turn.failed) phone.afterBatch(turn.uses.last())?.let { fresh ->
                 // Saves a screenshot round trip: the last result also carries the screen's new element list.
-                results.getJSONObject(results.length() - 1).getJSONArray("content").put(AgentJson.text(fresh))
+                turn.results.getJSONObject(turn.results.length() - 1).getJSONArray("content").put(AgentJson.text(fresh))
             }
-            messages.put(AgentJson.user(results))
+            messages.put(AgentJson.user(turn.results))
         }
-        throw SpokenException("that took too many steps, so i stopped. tell me where to pick it up")
+        throw SpokenException(turnCapMessage(runCatching { phone.currentScreen() }.getOrNull(), lastDoing))
+    }
+
+    /** One assistant turn: streamed, with tools running as their blocks complete; a plain request if streaming doesn't work. */
+    private suspend fun takeTurn(phone: Phone, status: (String) -> Unit): Turn {
+        val model = settings.claudeModel
+        if (streaming) {
+            val body = AgentJson.request(model, AGENT_PROMPT, messages, effort, stream = true).toString()
+            val progress = TurnProgress()
+            val t0 = System.nanoTime()
+            var toolNanos = 0L
+            var code = "200"
+            try {
+                val events = streamEvents(sseData(messagesRequest(settings.claudeKey, model, body)).buffer(Channel.UNLIMITED))
+                return consumeTurn(events, phone, status, progress).also { toolNanos = it.toolNanos }
+            } catch (e: StreamFormatException) {
+                code = "unreadable stream"
+                TimingLog.lastError = "stream: ${e.message}"
+                // Tools that already ran can't be replayed; otherwise read plain replies from now on and repeat this turn.
+                if (progress.toolsRun > 0) throw SpokenException("i couldn't read claude's reply, so i stopped. check the screen and ask again")
+                streaming = false
+            } catch (e: ApiException) {
+                code = e.code.toString()
+                claudeErrorMessage(e.code, e.body)?.let { throw SpokenException(it) }
+                throw e
+            } catch (e: java.io.IOException) {
+                code = e.javaClass.simpleName
+                throw e
+            } finally {
+                TimingLog.record("claude", (System.nanoTime() - t0 - toolNanos) / 1_000_000, requestDetail(body.length / 1024, effort, code, "stream"))
+            }
+        }
+        return consumeTurn(messageEvents(post()), phone, status)
     }
 
     private suspend fun post(): JSONObject {
