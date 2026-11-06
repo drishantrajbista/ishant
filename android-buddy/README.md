@@ -5,6 +5,51 @@ Buddy lives as a floating bubble on your phone. Hold it, ask a question about wh
 answers, Buddy speaks the answer, and a cursor flies around your screen and draws circles, boxes, arrows and notes on
 the things it is talking about.
 
+## What Buddy can do (version 1.9.1)
+
+**Answers and questions**
+- Hold the bubble and ask anything out loud. Buddy answers in short English and reads it aloud.
+- Understands Nepali, English, or a mix of the two.
+- Points at things on your screen with circles, arrows, boxes and labels.
+- Remembers recent exchanges, so follow-ups like "do that again" work.
+
+**Phone control (Claude API mode)**
+- Opens apps, websites, maps and settings pages.
+- Taps, types, scrolls, and goes back or home.
+- Retries a tap that did not register, scrolls to find off-screen items, and waits for slow screens.
+- Starts acting while Claude is still answering, which makes it feel faster.
+- Optional Power mode through Shizuku for faster, more reliable taps.
+
+**Quick commands (no Claude call, so instant)**
+- "YouTube khola", "go back", "go home", "flashlight on", "volume up", "pause", "next song".
+- "take a screenshot" saves to the gallery.
+- "set an alarm for 7am", "set a timer for 5 minutes".
+
+**Everyday help**
+- Alarms, timers, calendar events, web search and music control.
+- "What's my day?" gives a short spoken briefing (time, next events, notifications).
+- "What did I miss?" reads recent notifications, if you allow it.
+- Device checks such as battery and time.
+
+**Writing and copying**
+- "Write a message to Kristina saying I'll call at 10": Buddy writes the text and copies it. You open the chat, paste and send.
+- Works for captions, notes and replies too. "Copy that" copies the last answer.
+
+**Screenshots**
+- Full screenshots to the gallery, or crop part of the screen and save just that.
+
+**Memory and transcript**
+- Learns your nicknames for apps and your corrections. Short notes can be reviewed or deleted.
+- A chat transcript you can search, copy from or clear. It stays on your phone.
+
+**What Buddy does not do, by design**
+- It does not open chats in messaging apps (Instagram, WhatsApp, Messages) or type into them, and it never sends anything. You open the chat, paste and send.
+- It never types passwords, and it asks before sending, paying, posting or deleting.
+
+**Still in progress**
+- Shizuku power mode is in 1.9.1 and needs testing on a real phone.
+- The launch video is paused.
+
 Credit: the idea, the casual spoken-style system prompt and the pointing contract come from Clicky (MIT,
 https://github.com/farzaa/clicky). This is an independent Android re-implementation.
 
