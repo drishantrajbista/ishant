@@ -118,6 +118,28 @@ message list (every response's content, thinking blocks included, is echoed back
 until it is 10 minutes idle or 40 messages long. Haiku 5.5 gets 25 turns per request, Sonnet/Opus 40. **Tap the bubble
 at any time to stop everything immediately.**
 
+**Faster and steadier control (1.8):**
+- **Streaming, acting while it streams.** Each turn is read as a server-sent-event stream. A tool call starts the moment its block
+  has fully streamed in (its input JSON closed), while later blocks are still arriving; tools still run in order and the first
+  failure stops the rest. The history stays strictly append-only: the turn's `content` is rebuilt from the stream the way the
+  official SDKs do (blocks copied as started, text/thinking/signature deltas applied, tool input pieces joined and parsed) and
+  appended whole after the turn ends. If a stream turns out to be unreadable before any tool ran, that turn is repeated as a plain
+  request and plain requests are used from then on; if tools had already run, Buddy says so instead of replaying them. No
+  speculative speech: text is spoken only once the turn is known to be final.
+- HTTP/2 with a small keep-alive pool (the warm-up GET on touch-down shares the connection). Agent screenshots stay 1024 px / JPEG
+  60 and are only taken on the first turn or when Claude calls `screenshot`; after actions Claude gets the element list as text.
+- Settling is 250 ms of quiet (at most 1 s); after `open_app`, `open_settings`, `open_url`, `web_search`, `create_event` or
+  `android_nav` Buddy waits up to 1.2 s for the next window-state-changed event instead of a fixed pause.
+- A tap or swipe that is cancelled is retried once after 150 ms. A result that says the screen didn't change tells the model to try
+  something else.
+- New tools: `scroll_to_text(text)` (asks the system to show an off-screen node, else scrolls up to 6 pages each way until a node
+  containing the text is on screen, and returns its coordinates) and `wait_for(text?, seconds?)` (up to 8 s).
+- The element list (at most 60, labels 40 characters, never password text) now shows role (button, input, switch, link, text),
+  state (checked, unchecked, disabled, selected, focused), `scrollable`, and `pkg=` when the app changes.
+- When the turn cap is hit Buddy says where it stopped ("that took too many steps, i stopped at Settings after tapping Display").
+- A write request that names an app ("write a message to Kristina on Instagram") still copies the message, and also opens that app's
+  home screen with `open_app` once, then stops: no chat, contact, typing or tapping inside it, nothing sent. API mode only.
+
 **Thinking:** the prompt has a short "how to think" protocol (silent, never spoken): simple commands are just done; for an
 ambiguous, multi-step or risky request Claude first works out what you want and what "done" looks like, separates what it
 sees (screen, memory notes, recent conversation) from what it assumes, weighs at least two readings, and picks the best;
