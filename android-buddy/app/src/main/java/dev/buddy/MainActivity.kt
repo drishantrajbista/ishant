@@ -662,15 +662,25 @@ private fun Home(state: AppState, actions: Actions, running: Boolean, openTransc
                         MinimalSwitch(state.powerOn) { state.savePower(it) }
                     }
                     Hairline()
-                    SettingRow("Shizuku") { StatusChip(power.label, power == PowerStatus.READY) }
+                    SettingRow("Shizuku", power.todo) { StatusChip(power.label, power == PowerStatus.READY) }
                     Hairline()
                     when (power) {
+                        PowerStatus.PERMISSION_DENIED -> SettingRow("Open Shizuku", "Authorized apps → allow Buddy", Icons.Default.Settings, Tint.Grey,
+                            onClick = { if (!PowerMode.openShizuku(context)) Toast.makeText(context, "couldn't open Shizuku", Toast.LENGTH_SHORT).show() }) { Chevron() }
                         PowerStatus.NOT_INSTALLED -> SettingRow("Get Shizuku", "Free, open source", Icons.Default.Share, Tint.Blue, onClick = { PowerMode.getShizuku(context) }) { Chevron() }
                         PowerStatus.NOT_RUNNING -> SettingRow("Open Shizuku", "Start it there (see the steps below)", Icons.Default.Settings, Tint.Grey,
                             onClick = { if (!PowerMode.openShizuku(context)) Toast.makeText(context, "couldn't open Shizuku", Toast.LENGTH_SHORT).show() }) { Chevron() }
                         PowerStatus.PERMISSION_NEEDED -> SettingRow("Allow Buddy", "Shizuku asks you to confirm", Icons.Default.Check, Tint.Green, onClick = { PowerMode.requestPermission() }) { Chevron() }
                         else -> SettingRow("Open Shizuku", icon = Icons.Default.Settings, tint = Tint.Grey,
                             onClick = { if (!PowerMode.openShizuku(context)) Toast.makeText(context, "couldn't open Shizuku", Toast.LENGTH_SHORT).show() }) { Chevron() }
+                    }
+                    Hairline()
+                    SettingRow("Refresh", "Checks installed, running, permission and helper again", Icons.Default.Refresh, Tint.Grey,
+                        onClick = { PowerMode.refresh(context, state.powerOn) }) { Chevron() }
+                    if (power != PowerStatus.READY && power != PowerStatus.SWITCH_OFF) {
+                        Hairline()
+                        SettingRow("Reconnect", "Restarts the helper and asks for permission again", Icons.Default.Refresh, Tint.Orange,
+                            onClick = { PowerMode.reconnect(context) }) { Chevron() }
                     }
                 }
             }
@@ -721,7 +731,8 @@ private fun Home(state: AppState, actions: Actions, running: Boolean, openTransc
                         version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty(),
                         device = "${Build.MANUFACTURER} ${Build.MODEL}", android = "Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})",
                         mode = state.provider.name, model = state.claudeModel, voice = state.voice.name,
-                        keyMasked = maskKey(state.settings.claudeKey), transcriptCount = state.transcriptCount, powerMode = "${if (state.powerOn) "on" else "off"}, ${PowerMode.status.value.label}", checks = checks, timing = TimingLog.entries(),
+                        keyMasked = maskKey(state.settings.claudeKey), transcriptCount = state.transcriptCount, powerMode = "${if (state.powerOn) "on" else "off"}, ${PowerMode.status.value.label}", checks = checks,
+                        shizuku = formatShizukuDiagnostics(PowerMode.diagnostics(context, state.powerOn), clock = { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date(it)) }), timing = TimingLog.entries(),
                         lastError = TimingLog.lastError, crash = state.crashText.takeIf { it.isNotBlank() }, secretToScrub = state.settings.claudeKey,
                     )
                     (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)

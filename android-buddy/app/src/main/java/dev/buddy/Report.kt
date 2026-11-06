@@ -22,6 +22,8 @@ class ReportInfo(
     val transcriptCount: Int = 0,
     /** Power mode in words, e.g. "on, Ready" (state only). */
     val powerMode: String = "",
+    /** The Shizuku block from [formatShizukuDiagnostics] (state only). */
+    val shizuku: String = "",
 )
 
 /** Plain text for "Copy report". Contains no API key: just its last 4 characters. */
@@ -38,6 +40,7 @@ fun buildReport(i: ReportInfo): String {
         appendLine("Claude key: ${i.keyMasked}")
         appendLine("Transcript: ${i.transcriptCount} saved (contents not included)")
         if (i.powerMode.isNotEmpty()) appendLine("Power mode: ${i.powerMode}")
+        if (i.shizuku.isNotEmpty()) appendLine(i.shizuku)
         appendLine()
         appendLine("Checks:")
         if (i.checks.isEmpty()) appendLine("(not run yet)")

@@ -96,11 +96,9 @@ object SetupCheck {
     private fun power(context: Context, s: Settings): CheckResult {
         PowerMode.refresh(context, s.powerMode)
         val st = PowerMode.status.value
-        return when {
-            !s.powerMode -> CheckResult("Power mode", true, "off (optional). Taps use accessibility; Shizuku is ${st.label.lowercase()}")
-            st == PowerStatus.READY -> CheckResult("Power mode", true, "ready: taps and swipes go through Shizuku")
-            else -> CheckResult("Power mode", false, "on but ${st.label.lowercase()}: Buddy uses accessibility instead")
-        }
+        val detail = powerCheckDetail(s.powerMode, st, PowerMode.errors.lastOrNull()?.text)
+        return if (!s.powerMode) CheckResult("Power mode", true, "off (optional): $detail")
+        else CheckResult("Power mode", st == PowerStatus.READY, if (st == PowerStatus.READY) detail else "$detail. Buddy uses accessibility instead")
     }
 
     private fun notifications(context: Context) =

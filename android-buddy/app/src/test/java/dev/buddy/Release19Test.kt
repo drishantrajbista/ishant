@@ -65,13 +65,53 @@ class InputPathChoiceTest {
         }
     }
 
+    private fun st(i: Boolean = true, r: Boolean = true, g: Boolean = true, d: Boolean = false, w: Boolean = true, b: Boolean = true, f: Boolean = false, x: Boolean = false) =
+        powerStatus(i, r, g, d, w, b, f, x)
+
     @Test fun statusMapping() {
-        assertEquals(PowerStatus.NOT_INSTALLED, powerStatus(false, true, true, false))
-        assertEquals(PowerStatus.NOT_RUNNING, powerStatus(true, false, true, false))
-        assertEquals(PowerStatus.PERMISSION_NEEDED, powerStatus(true, true, false, false))
-        assertEquals(PowerStatus.READY, powerStatus(true, true, true, false))
-        assertEquals(PowerStatus.DEGRADED, powerStatus(true, true, true, true))
-        assertEquals(listOf("Not installed", "Not running", "Permission needed", "Ready", "Degraded"), PowerStatus.entries.map { it.label })
+        assertEquals(PowerStatus.NOT_INSTALLED, st(i = false))
+        assertEquals(PowerStatus.NOT_RUNNING, st(r = false))
+        assertEquals(PowerStatus.PERMISSION_NEEDED, st(g = false))
+        assertEquals(PowerStatus.PERMISSION_DENIED, st(g = false, d = true))
+        assertEquals(PowerStatus.SWITCH_OFF, st(w = false, b = false))
+        assertEquals(PowerStatus.HELPER_STARTING, st(b = false))
+        assertEquals(PowerStatus.HELPER_FAILED, st(b = false, f = true))
+        assertEquals(PowerStatus.READY, st())
+        assertEquals(PowerStatus.DEGRADED, st(x = true))
+        assertEquals(PowerStatus.READY, st(f = true))                       // a stale failure doesn't hide a bound helper
+        assertEquals(PowerStatus.NOT_RUNNING, st(r = false, g = false, b = false))   // the most basic problem wins
+        assertEquals("Starting helper…", PowerStatus.HELPER_STARTING.label)
+        assertEquals("Helper didn't start", PowerStatus.HELPER_FAILED.label)
+        assertTrue(PowerStatus.PERMISSION_DENIED.todo.contains("Authorized apps"))
+        assertTrue(PowerStatus.entries.all { it.todo.isNotBlank() && !it.todo.contains('\n') })
+    }
+
+    @Test fun readyOnlyWithABoundHelper() {
+        for (b in listOf(false)) assertTrue(st(b = b) != PowerStatus.READY)
+    }
+
+    @Test fun checkSetupNamesTheFailingStep() {
+        assertEquals("Shizuku app not installed (switch off)", powerCheckDetail(false, PowerStatus.NOT_INSTALLED, null))
+        assertTrue(powerCheckDetail(true, PowerStatus.NOT_RUNNING, null).startsWith("Shizuku app not running"))
+        assertEquals("permission denied (Shizuku → Authorized apps)", powerCheckDetail(true, PowerStatus.PERMISSION_DENIED, null))
+        assertEquals("helper didn't start: bind: SecurityException: x", powerCheckDetail(true, PowerStatus.HELPER_FAILED, "bind: SecurityException: x"))
+    }
+
+    @Test fun diagnosticsAreStateOnlyAndBounded() {
+        val errors = (1..9).map { PowerError(it * 1000L, "bindUserService: IllegalStateException: " + "x".repeat(300)) }
+        val text = formatShizukuDiagnostics(
+            ShizukuDiag("13.5.4", true, false, 13, 2000, 0, false, true, 5000L, true, PowerStatus.READY, errors), now = 65_000L, clock = { "t$it" },
+        )
+        assertTrue(text.contains("installed, version 13.5.4"))
+        assertTrue(text.contains("uid: 2000 (adb shell)"))
+        assertTrue(text.contains("permission: granted (0)"))
+        assertTrue(text.contains("helper bound: yes"))
+        assertTrue(text.contains("fired 60 s ago"))
+        assertEquals(5, Regex("t\\d+000 bindUserService").findAll(text).count())      // only the last five
+        assertTrue(text.lines().all { it.length < 260 })                                // long errors are cut
+        assertFalse(text.contains("sk-ant", ignoreCase = true))
+        val off = formatShizukuDiagnostics(ShizukuDiag(null, false, null, null, null, null, null, false, null, false, PowerStatus.NOT_INSTALLED, emptyList()))
+        assertTrue(off.contains("not installed") && off.contains("never") && off.contains("errors: none") && off.contains("uid: n/a"))
     }
 }
 

@@ -21,8 +21,8 @@ android {
         applicationId = "dev.buddy"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "1.9"
+        versionCode = 21
+        versionName = "1.9.1"
         // Play forbids self-updating apps: build the bundle with -PplayStore=true to switch the update check off.
         buildConfigField("boolean", "UPDATE_CHECK", if (project.hasProperty("playStore")) "false" else "true")
     }
