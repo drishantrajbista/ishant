@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.ui.draw.scale
@@ -111,6 +112,7 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()   // brand splash (Android 12+ API, back-ported), fading into the app
         super.onCreate(savedInstanceState)
         val settings = Settings(this)
+        PowerMode.start(this)
         setContent { BuddyTheme { Surface(Modifier.fillMaxSize(), color = colors.background) { BuddyApp(settings) } } }
     }
 }
@@ -154,6 +156,7 @@ private class AppState(private val context: Context, val settings: Settings) {
     var conversation by mutableStateOf(settings.conversationMode)
     var learn by mutableStateOf(settings.learnFromMe)
     var keepTranscript by mutableStateOf(settings.keepTranscript)
+    var powerOn by mutableStateOf(settings.powerMode)
     var thinkDeeper by mutableStateOf(settings.thinkDeeper)
     var transcriptCount by mutableStateOf(0)
     var notes by mutableStateOf(settings.notes)
@@ -178,6 +181,7 @@ private class AppState(private val context: Context, val settings: Settings) {
         calendarOk = context.hasCalendarPermission()
         claudeInstalled = context.isClaudeAppInstalled()
         transcriptCount = TranscriptStore.entries(context).size
+        PowerMode.refresh(context, settings.powerMode)
         notes = settings.notes   // Buddy may have saved something while this screen was closed
         aliases = settings.aliases
     }
@@ -200,6 +204,7 @@ private class AppState(private val context: Context, val settings: Settings) {
     fun setDraw(on: Boolean) { drawTags = on; settings.drawTags = on }
     fun saveConversation(on: Boolean) { conversation = on; settings.conversationMode = on }
     fun saveThink(on: Boolean) { thinkDeeper = on; settings.thinkDeeper = on }
+    fun savePower(on: Boolean) { powerOn = on; settings.powerMode = on; PowerMode.refresh(context, on) }
     fun saveKeep(on: Boolean) { keepTranscript = on; settings.keepTranscript = on }
     fun saveLearn(on: Boolean) { learn = on; settings.learnFromMe = on }
     fun deleteNote(note: String) { notes = notes - note; settings.notes = notes }
@@ -648,6 +653,30 @@ private fun Home(state: AppState, actions: Actions, running: Boolean, openTransc
             }
             Footnote("Stored only on this phone, never synced.")
 
+            // --- Power mode ---
+            SectionHeader("Power mode (Shizuku)")
+            val power by PowerMode.status.collectAsState()
+            GroupCard {
+                androidx.compose.foundation.layout.Column(Modifier.animateContentSize(spring)) {
+                    SettingRow("Use power mode for taps", "Optional. Faster, more reliable taps, swipes and back/home. Typing and screenshots stay on accessibility.", Icons.Default.Build, Tint.Orange) {
+                        MinimalSwitch(state.powerOn) { state.savePower(it) }
+                    }
+                    Hairline()
+                    SettingRow("Shizuku") { StatusChip(power.label, power == PowerStatus.READY) }
+                    Hairline()
+                    when (power) {
+                        PowerStatus.NOT_INSTALLED -> SettingRow("Get Shizuku", "Free, open source", Icons.Default.Share, Tint.Blue, onClick = { PowerMode.getShizuku(context) }) { Chevron() }
+                        PowerStatus.NOT_RUNNING -> SettingRow("Open Shizuku", "Start it there (see the steps below)", Icons.Default.Settings, Tint.Grey,
+                            onClick = { if (!PowerMode.openShizuku(context)) Toast.makeText(context, "couldn't open Shizuku", Toast.LENGTH_SHORT).show() }) { Chevron() }
+                        PowerStatus.PERMISSION_NEEDED -> SettingRow("Allow Buddy", "Shizuku asks you to confirm", Icons.Default.Check, Tint.Green, onClick = { PowerMode.requestPermission() }) { Chevron() }
+                        else -> SettingRow("Open Shizuku", icon = Icons.Default.Settings, tint = Tint.Grey,
+                            onClick = { if (!PowerMode.openShizuku(context)) Toast.makeText(context, "couldn't open Shizuku", Toast.LENGTH_SHORT).show() }) { Chevron() }
+                    }
+                }
+            }
+            Footnote("Setup: 1 Install Shizuku. 2 Settings → About phone → Software information → tap Build number 7 times. 3 Settings → Developer options → turn on Wireless debugging (needs Wi-Fi) and pair it as Shizuku's in-app guide shows. 4 Start Shizuku, then tap Allow Buddy here.")
+            Footnote("Honest notes: Shizuku has to be started again after every reboot, and it needs Wi-Fi to start. Power mode is optional; Buddy works the same without it, and falls back to accessibility if Shizuku stops (the status shows Degraded). It only injects taps, swipes and back/home/recents locally and sends nothing anywhere.")
+
             // --- Control ---
             SectionHeader("Control")
             GroupCard {
@@ -692,7 +721,7 @@ private fun Home(state: AppState, actions: Actions, running: Boolean, openTransc
                         version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull().orEmpty(),
                         device = "${Build.MANUFACTURER} ${Build.MODEL}", android = "Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})",
                         mode = state.provider.name, model = state.claudeModel, voice = state.voice.name,
-                        keyMasked = maskKey(state.settings.claudeKey), transcriptCount = state.transcriptCount, checks = checks, timing = TimingLog.entries(),
+                        keyMasked = maskKey(state.settings.claudeKey), transcriptCount = state.transcriptCount, powerMode = "${if (state.powerOn) "on" else "off"}, ${PowerMode.status.value.label}", checks = checks, timing = TimingLog.entries(),
                         lastError = TimingLog.lastError, crash = state.crashText.takeIf { it.isNotBlank() }, secretToScrub = state.settings.claudeKey,
                     )
                     (context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)

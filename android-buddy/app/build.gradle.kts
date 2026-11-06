@@ -21,8 +21,8 @@ android {
         applicationId = "dev.buddy"
         minSdk = 26
         targetSdk = 35
-        versionCode = 19
-        versionName = "1.8"
+        versionCode = 20
+        versionName = "1.9"
         // Play forbids self-updating apps: build the bundle with -PplayStore=true to switch the update check off.
         buildConfigField("boolean", "UPDATE_CHECK", if (project.hasProperty("playStore")) "false" else "true")
     }
@@ -54,7 +54,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true; buildConfig = true }
+    buildFeatures { compose = true; buildConfig = true; aidl = true }
 }
 
 dependencies {
@@ -69,6 +69,9 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // Optional power mode: Shizuku-API (MIT) lets a small helper process inject taps with shell privileges, if the user starts Shizuku.
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")  // android.jar's org.json is a stub in JVM tests

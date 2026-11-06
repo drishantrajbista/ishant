@@ -24,6 +24,8 @@ Screenshots are not captured at any other time. The app does not keep a history 
 
 **Transcript (on by default, can be switched off).** Buddy saves the last 300 things you said and its replies in a private file on your device so you can read, copy or delete them; you can clear them all or turn "Keep transcript" off. The last few exchanges are also sent to Anthropic as context in your next request (Claude API mode), and a cropped screenshot you choose replaces the full screenshot for one question. Nothing is sent to the developer.
 
+**Power mode (optional, off by default).** If you switch it on and have started the Shizuku app, Buddy uses the Shizuku permission to inject taps, swipes and back/home/recents presses locally on your phone. It does not type, does not capture the screen through it, and sends nothing anywhere.
+
 **Text Buddy writes for you.** When you ask Buddy to write something (a note, a caption, a message), it puts that text on your clipboard so you can paste it. It is not sent anywhere by Buddy and nothing is sent on your behalf.
 
 **Screenshots you save.** When you ask Buddy to take a screenshot (by voice, or with Save in the crop view), the picture goes to your device's gallery: either the phone's own screenshot, or a PNG in Pictures/Buddy. It stays on your device; Buddy does not upload it and the developer never receives it.

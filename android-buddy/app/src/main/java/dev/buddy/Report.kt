@@ -20,6 +20,8 @@ class ReportInfo(
     val secretToScrub: String = "",
     /** How many exchanges the transcript holds (a count only, never the contents). */
     val transcriptCount: Int = 0,
+    /** Power mode in words, e.g. "on, Ready" (state only). */
+    val powerMode: String = "",
 )
 
 /** Plain text for "Copy report". Contains no API key: just its last 4 characters. */
@@ -35,6 +37,7 @@ fun buildReport(i: ReportInfo): String {
         appendLine("Voice engine: ${i.voice}")
         appendLine("Claude key: ${i.keyMasked}")
         appendLine("Transcript: ${i.transcriptCount} saved (contents not included)")
+        if (i.powerMode.isNotEmpty()) appendLine("Power mode: ${i.powerMode}")
         appendLine()
         appendLine("Checks:")
         if (i.checks.isEmpty()) appendLine("(not run yet)")

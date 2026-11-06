@@ -372,6 +372,47 @@ shows the listening ring and "go ahead…". Silence or a tap ends it, and the co
 follow-up window). It does not open after a plain action confirmation ("done"), only after a spoken answer (or a question
 Buddy asks you).
 
+## Power mode (Shizuku)
+
+An **optional** way to send taps, swipes and back/home/recents presses that is faster and more reliable than the accessibility
+service, using [Shizuku](https://github.com/RikkaApps/Shizuku). It is **off by default**; accessibility stays the default and the
+fallback. The *Power mode (Shizuku)* card in settings has a switch ("Use power mode for taps"), a status chip (Not installed, Not
+running, Permission needed, Ready, Degraded) and the button that fits the state (Get Shizuku, Open Shizuku, Allow Buddy).
+
+Set it up on a Samsung Galaxy A15 (One UI):
+1. Install Shizuku (the card's "Get Shizuku" opens the Play Store listing or https://shizuku.rikka.app/download/).
+2. Settings → About phone → Software information → tap **Build number** 7 times.
+3. Settings → Developer options → turn on **Wireless debugging** (needs Wi-Fi) and pair it as Shizuku's in-app guide shows.
+4. Start Shizuku, then tap **Allow Buddy** in Buddy's card.
+
+Honest notes: Shizuku has to be started again after every reboot (wireless-debugging mode), and it needs Wi-Fi to start. Power mode
+is optional and Buddy works the same without it. The Play build is not the sideload target: Shizuku's provider and permission are
+declared in the manifest, but nothing in it needs more than the Play-allowed `INTERACT_ACROSS_USERS_FULL`-protected provider.
+
+How it works (the security-critical part):
+- Buddy binds a small **UserService** (`InputService`, run by Shizuku in a separate shell-privileged process). Its AIDL interface
+  (`IInputService`) has only `tap`, `longPress`, `doubleTap`, `swipe(x1,y1,x2,y2,ms)` and `key(code)` for a fixed whitelist
+  (BACK, HOME, APP_SWITCH, ENTER, DEL, the DPAD keys, VOLUME_UP/DOWN, MEDIA play/pause/next/previous/play/pause). There is no
+  exec or shell-string method, and nothing built from model output beyond integers.
+- Coordinates are validated before the call (NaN, infinity, negatives and points well off the screen are rejected with a tool
+  error; a few pixels past the edge are clamped) and the helper re-checks ranges and the key whitelist itself.
+- Inside the helper, events are injected through `InputManager.injectInputEvent` (found by reflection, async mode). If that isn't
+  available it falls back to the `input` command with numeric arguments only (no shell). Which of the two works depends on the
+  Android version and could not be tried here.
+- **Typing and screenshots stay on accessibility**: Buddy never types through Shizuku (the password-field guard lives in the
+  accessibility layer) and never uses `screencap`, so screens that opt out of screenshots stay protected. Of the keys Claude can
+  press only back and home use the helper; enter, backspace and select-all stay on accessibility.
+- Shizuku carries an action only if the switch is on **and** Shizuku is running **and** Buddy has its permission **and** the
+  helper is bound ([`chooseInputPath`](app/src/main/java/dev/buddy/InputSafety.kt)). If a call throws or takes over 1.5 s, that
+  action is done through accessibility and the status shows Degraded until a call works again. Claude's tool schemas and the
+  prompt are unchanged: power mode is invisible to the model. Each action's timing entry says `via shizuku` or `via accessibility`,
+  Check setup has a *Power mode* row and Copy report a state-only line.
+- Uses Shizuku-API 13.1.5 (`dev.rikka.shizuku:api` and `:provider`). Per its README the provider is declared with
+  `android:multiprocess="false"` (not multiprocess), `${applicationId}.shizuku`, exported and protected by
+  `INTERACT_ACROSS_USERS_FULL`; `newProcess` is not used.
+
+Credits: Shizuku-API is MIT licensed and Shizuku (the app) is Apache-2.0, both by RikkaApps.
+
 ## Speed
 
 - **Local commands** need no AI and run instantly in either mode: "open <app>" (only on a confident match), "go home", "go

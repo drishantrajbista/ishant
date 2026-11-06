@@ -28,7 +28,7 @@ object SetupCheck {
     suspend fun run(context: Context, settings: Settings): List<CheckResult> {
         running.value = true
         try {
-            val list = listOf(mode(settings), claude(settings), accessibility(context), screen(), voice(context, settings), notifications(context), calendar(context))
+            val list = listOf(mode(settings), claude(settings), accessibility(context), screen(), voice(context, settings), notifications(context), calendar(context), power(context, settings))
             results.value = list
             return list
         } finally {
@@ -89,6 +89,17 @@ object SetupCheck {
             else CheckResult(name, true, "${bmp.width}x${bmp.height}, not blank, via ${if (a11y != null) "accessibility" else "screen sharing"}", ms)
         } catch (e: Exception) {
             CheckResult(name, false, e.message ?: e.javaClass.simpleName, (System.nanoTime() - t0) / 1_000_000)
+        }
+    }
+
+    /** Optional: only a problem if the switch is on but Shizuku isn't ready. State only. */
+    private fun power(context: Context, s: Settings): CheckResult {
+        PowerMode.refresh(context, s.powerMode)
+        val st = PowerMode.status.value
+        return when {
+            !s.powerMode -> CheckResult("Power mode", true, "off (optional). Taps use accessibility; Shizuku is ${st.label.lowercase()}")
+            st == PowerStatus.READY -> CheckResult("Power mode", true, "ready: taps and swipes go through Shizuku")
+            else -> CheckResult("Power mode", false, "on but ${st.label.lowercase()}: Buddy uses accessibility instead")
         }
     }
 

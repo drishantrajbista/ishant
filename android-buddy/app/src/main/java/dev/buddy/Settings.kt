@@ -126,6 +126,11 @@ class Settings(context: Context) : QuotaStore {
         get() = str("think_deeper", "0") == "1"
         set(v) = put("think_deeper", if (v) "1" else "0")
 
+    /** "Power mode": use Shizuku (if it is running and allowed) for taps, swipes and a few keys. Off by default. */
+    var powerMode: Boolean
+        get() = str("power_mode", "0") == "1"
+        set(v) = put("power_mode", if (v) "1" else "0")
+
     /** "Keep transcript": every exchange is saved in a file on this phone (last 300), never synced. */
     var keepTranscript: Boolean
         get() = str("keep_transcript", "1") == "1"

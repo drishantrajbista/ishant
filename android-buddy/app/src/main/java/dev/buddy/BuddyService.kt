@@ -138,6 +138,7 @@ class BuddyService : Service(), BubbleOverlay.Callbacks, PhoneListener.Events {
         ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), type)
 
         settings = Settings(this)
+        PowerMode.start(this); PowerMode.refresh(this, settings.powerMode)   // power mode: bind the helper if it is on and Shizuku is ready
         if (projectionNeeded) {
             val projection = try {
                 (getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager).getMediaProjection(code, data!!)

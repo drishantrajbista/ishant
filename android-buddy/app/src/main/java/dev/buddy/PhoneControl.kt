@@ -43,6 +43,7 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
     private var cursor: Pt? = null                     // display px
     private var lastTap: Pair<Int, Int>? = null        // display px
     private val screens = ScreenWatcher()              // notices an action that changed nothing
+    private var inputUsed: InputPath? = null           // the path that carried the current tool's gesture or key
 
     private val a11y get() = BuddyAccessibilityService.instance
     private fun hands(): BuddyAccessibilityService =
@@ -84,7 +85,14 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
 
     override suspend fun run(use: ToolUse, status: (String) -> Unit): List<JSONObject> {
         shotResult = null
-        TimingLog.time("action", use.name) { if (use.isComputer) computer(use) else custom(use) }
+        inputUsed = null
+        val t0 = System.nanoTime()
+        try {
+            if (use.isComputer) computer(use) else custom(use)
+        } finally {
+            // Gestures and keys say which path carried them: "left_click via shizuku" or "... via accessibility".
+            TimingLog.record("action", (System.nanoTime() - t0) / 1_000_000, use.name + (inputUsed?.let { " via ${it.label}" } ?: ""))
+        }
         return shotResult ?: listOf(AgentJson.text("OK"))
     }
 
@@ -142,7 +150,7 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
             "android_nav" -> {
                 val action = use.input.optString("action")
                 stage.status(action.replace('_', ' '))
-                opening { if (!hands().nav(action)) throw ToolError("couldn't do $action") }
+                opening { if (!navigate(action)) throw ToolError("couldn't do $action") }
                 a11y?.acted()
             }
             else -> throw ToolError("unknown tool ${use.name}")
@@ -159,15 +167,15 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
             }
             "zoom" -> zoom(input)
             "mouse_move" -> { val p = point(input, "coordinate"); stage.status("pointing"); glide(p) }
-            "left_click" -> act(input, "tapping") { x, y -> hands().tap(x, y) }
-            "double_click" -> act(input, "double tapping") { x, y -> hands().doubleTap(x, y) }
-            "right_click" -> act(input, "pressing and holding") { x, y -> hands().longPress(x, y) }
+            "left_click" -> act(input, "tapping") { x, y -> routed(x, y, { it.tap(x, y) }) { hands().tap(x, y) } }
+            "double_click" -> act(input, "double tapping") { x, y -> routed(x, y, { it.doubleTap(x, y) }) { hands().doubleTap(x, y) } }
+            "right_click" -> act(input, "pressing and holding") { x, y -> routed(x, y, { it.longPress(x, y) }) { hands().longPress(x, y) } }
             "left_click_drag" -> {
                 val from = displayPoint(point(input, "start_coordinate"))
                 val to = displayPoint(point(input, "coordinate"))
                 stage.status("swiping")
                 glide(from)
-                dispatch { hands().swipe(from.first, from.second, to.first, to.second) }
+                dispatch { swipe(from.first, from.second, to.first, to.second) }
                 glide(to)
             }
             "scroll" -> {
@@ -176,7 +184,7 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
                 val s = scrollSwipe(input.optString("scroll_direction"), input.optInt("scroll_amount", 3), p.first, p.second, m.displayW, m.displayH)
                 stage.status("scrolling ${input.optString("scroll_direction")}")
                 glide(s[0] to s[1])
-                dispatch { hands().swipe(s[0], s[1], s[2], s[3]) }
+                dispatch { swipe(s[0], s[1], s[2], s[3]) }
                 glide(s[2] to s[3])
             }
             "type" -> type(input.optString("text"))
@@ -259,6 +267,47 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
         dispatch { block(d.first, d.second) }
     }
 
+    // region power mode (Shizuku): gestures and navigation keys only; typing and screenshots never go through it
+
+    /** Runs [accessibility] unless power mode is on, ready and has a point it accepts: then the helper does it, and any failure falls back. */
+    private suspend fun routed(x: Int, y: Int, power: (IInputService) -> Boolean, accessibility: suspend () -> Boolean): Boolean {
+        val svc = PowerMode.serviceFor(settings.powerMode)
+        val point = if (svc == null) null else map?.let { m -> validatePoint(x.toDouble(), y.toDouble(), m.displayW, m.displayH) }
+        return carry(if (svc != null && point != null) svc else null, power, accessibility)
+    }
+
+    private suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int): Boolean {
+        val svc = PowerMode.serviceFor(settings.powerMode)
+        val m = map
+        if (svc != null && m != null) {
+            val a = validatePoint(x1.toDouble(), y1.toDouble(), m.displayW, m.displayH)
+            val b = validatePoint(x2.toDouble(), y2.toDouble(), m.displayW, m.displayH)
+            return carry(svc, { it.swipe(a.first, a.second, b.first, b.second, 300) }) { hands().swipe(x1, y1, x2, y2) }
+        }
+        return carry(null, { true }) { hands().swipe(x1, y1, x2, y2) }
+    }
+
+    private suspend fun routedKey(code: Int, accessibility: suspend () -> Boolean): Boolean =
+        carry(PowerMode.serviceFor(settings.powerMode), { it.key(code) }, accessibility)
+
+    /** back, home and recents are key presses for the helper (accessibility does the rest, and is the fallback). */
+    private suspend fun navigate(action: String): Boolean {
+        val code = when (action) { "back" -> KEY_BACK; "home" -> KEY_HOME; "recents" -> KEY_APP_SWITCH; else -> null }
+        return if (code == null) hands().nav(action) else routedKey(code) { hands().nav(action) }
+    }
+
+    private suspend fun carry(svc: IInputService?, power: (IInputService) -> Boolean, accessibility: suspend () -> Boolean): Boolean {
+        val r = routeInput(
+            svc?.let { s -> suspend { check(power(s)) { "the helper couldn't inject that" }; true } },
+            POWER_TIMEOUT_MS, PowerMode::markDegraded, accessibility,
+        )
+        inputUsed = r.path
+        if (r.path == InputPath.SHIZUKU) PowerMode.markWorked()
+        return r.value
+    }
+
+    // endregion
+
     private suspend fun type(raw: String) {
         stage.status("typing…")
         val submit = raw.endsWith("\n")
@@ -270,7 +319,11 @@ class PhoneControl(private val context: Context, private val stage: Stage, priva
     private suspend fun key(text: String, repeat: Int) {
         val action = parseKey(text) ?: throw ToolError("unsupported key \"$text\". supported: $SUPPORTED_KEYS")
         stage.status("pressing ${text.lowercase()}")
-        hands().pressKey(action, repeat)?.let { throw ToolError(it) }
+        val code = when (action) { KeyAction.BACK -> KEY_BACK; KeyAction.HOME -> KEY_HOME; else -> null }
+        if (code == null) hands().pressKey(action, repeat)?.let { throw ToolError(it) }   // enter, backspace, select all: typing stays with accessibility
+        else repeat(repeat.coerceIn(1, 100)) {
+            if (!routedKey(code) { hands().pressKey(action, 1) == null }) throw ToolError("couldn't press ${text.lowercase()}")
+        }
         a11y?.acted()
     }
 
